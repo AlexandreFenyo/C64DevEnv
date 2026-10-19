@@ -24,6 +24,7 @@ for p in $(make -s list); do
     lbl="build/$p.labels"
     [ -s "$prg" ] || { echo "ECHEC : $prg absent ou vide"; exit 1; }
     [ -s "$lbl" ] || { echo "ECHEC : $lbl absent ou vide"; exit 1; }
+    [ -s "build/$p.dbg" ] || { echo "ECHEC : build/$p.dbg (infos de débogage) absent"; exit 1; }
     # Un .prg C64 commence par l'adresse de chargement $0801.
     head="$(head -c 2 "$prg" | od -An -tx1 | tr -d ' \n')"
     [ "$head" = "0108" ] || { echo "ECHEC : $prg ne commence pas par \$0801 (lu : $head)"; exit 1; }

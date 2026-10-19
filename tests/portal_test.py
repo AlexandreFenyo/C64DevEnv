@@ -192,7 +192,36 @@ def main():
         st, r = dbg("label", "loop")
         check("loop = $0831" in r["stdout"], "recherche de label")
 
-        st, logs = request("GET", "/api/logs?name=vice&lines=20")
+        # Vue Code : infos source et désassemblage via l'API.
+        st, ci = request("GET", "/api/codeinfo")
+        check(st == 200 and ci["prog"] == "hello" and ci["files"] == ["examples/hello/hello.s"],
+              "codeinfo : programme et fichier source (%s)" % (ci.get("files") if isinstance(ci, dict) else ci))
+        check(ci["lines"]["examples/hello/hello.s"].get("18") == [0x080d, 0x080f],
+              "codeinfo : ligne 18 -> $080d-$080f")
+        check(any(s["name"] == "CODE" and s["start"] == 0x080d for s in ci["segments"]), "codeinfo : segment CODE")
+        st, r = dbg("disasm", "pc", "10")
+        check(r["rc"] == 0 and "JMP loop" in r["stdout"], "disasm via le portail")
+        st, r = dbg("where")
+        check("hello.s:38" in r["stdout"], "where via le portail : %s" % r["stdout"].strip())
+        st, _ = request("GET", "/api/codeinfo?prog=../x")
+        check(st == 400, "codeinfo : nom invalide refusé (%s)" % st)
+
+        # Mémoire : lecture brute des 64 Ko et par banque.
+        st, ram = request("GET", "/api/ram", raw=True)
+        check(st == 200 and len(ram) == 65536 and ram[0x02FF] == 0x42, "RAM 64 Ko, témoin $02FF = $42")
+        st, rom = request("GET", "/api/ram?start=40960&len=2&bank=rom", raw=True)
+        check(st == 200 and rom == b"\x94\xe3", "RAM banque rom en $A000 (%r)" % rom)
+        st, _ = request("GET", "/api/ram?start=65535&len=2")
+        check(st == 400, "RAM : plage hors limites refusée (%s)" % st)
+        st, _ = request("GET", "/api/ram?bank=../x")
+        check(st == 400, "RAM : banque invalide refusée (%s)" % st)
+
+        # Page : les nouvelles vues sont présentes.
+        st, page = request("GET", "/", raw=True)
+        for anchor in (b'id="code-view"', b'id="mem-map"', b'id="hex-view"', b'id="restart-step"', b'id="type-form"'):
+            check(anchor in page, "page : %s" % anchor.decode())
+
+        st, logs = request("GET", "/api/logs?name=vice&lines=2000")
         check(st == 200 and "AUTOSTART" in logs["text"], "journal VICE lisible")
         st, jobs = request("GET", "/api/jobs")
         check(len(jobs["jobs"]) >= 3, "historique des tâches (%d)" % len(jobs["jobs"]))

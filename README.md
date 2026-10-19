@@ -47,7 +47,13 @@ tools/portal.sh restart   # après une modification de tools/portal.py
 tools/portal.sh install   # l'installe en service permanent (uninstall pour l'enlever)
 ```
 
-Depuis la page : compiler, lancer un programme (visible ou invisible, avec ou sans moniteur, warp), faire une capture d'écran, lire les sources, lancer les tests, et déboguer avec l'image du C64 en direct, les registres, pause/pas à pas/continuer, les points d'arrêt, la mémoire et les labels. Le portail appelle les mêmes outils que la ligne de commande.
+Depuis la page : compiler, lancer un programme (visible ou invisible, avec ou sans moniteur, warp), faire une capture d'écran, lire les sources, lancer les tests, et déboguer :
+
+- **Moniteur** : image du C64 en direct, registres, « Recommencer pas à pas » (arrêt sur la première instruction du programme), Pause, Pas, Pas sans JSR, Continuer, points d'arrêt, labels, clavier du C64.
+- **Code** : désassemblage ou source (`.s` / `.c`) avec la ligne en cours surlignée ; un clic dans la marge pose ou retire un point d'arrêt.
+- **Mémoire** : carte visuelle des 64 Ko (un pixel par octet, octets modifiés en blanc), focus hexa + texte (codes écran, PETSCII, ASCII) sur la zone cliquée, sélection à la souris (valeurs, mots 16 bits, texte, copie, surveillance), modification d'un octet par double-clic, raccourcis vers les zones du C64 et les segments du programme.
+
+Lien direct vers une zone mémoire : `http://localhost:8064/#mem=0400-04ff`. Le portail appelle les mêmes outils que la ligne de commande.
 
 ## Déboguer
 
@@ -60,6 +66,9 @@ tools/dbg.py regs                         # A X Y SP PC FLAGS
 tools/dbg.py mem $02FF 16                 # hexdump (adresse décimale, $hex, 0xhex ou label)
 tools/dbg.py break loop && tools/dbg.py cont && tools/dbg.py wait   # point d'arrêt sur un label
 tools/dbg.py step ; tools/dbg.py next ; tools/dbg.py list ; tools/dbg.py delete 1
+tools/dbg.py where                        # ligne source de l'instruction courante
+tools/dbg.py disasm                       # désassemblage autour du PC, avec labels
+tools/dbg.py type 'run\n'                 # tape au clavier du C64
 tools/dbg.py quit                         # ou tools/stop.sh
 ```
 

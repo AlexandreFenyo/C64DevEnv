@@ -58,10 +58,18 @@ tools/run.sh [--show|--headless] [--warp] [--cycles N] [--screenshot f.png] [--m
 
 ```
 tools/dbg.py [--port P] [--labels F] [--timeout S] CMD [ARGS]
-regs | mem ADDR [LEN] | poke ADDR VAL... | break ADDR [ADDR2] | watch ADDR [ADDR2] | delete N | list
-step [N] | next | pause | cont | wait [S] | status | reset [hard] | dump ADDR LEN FICHIER
+regs | mem ADDR [LEN] [--bank B] | poke ADDR VAL... | break ADDR [ADDR2] | watch ADDR [ADDR2] | delete N | list
+step [N] | next | pause | jump ADDR | type TEXTE | cont | wait [S] | status | reset [hard]
+dump ADDR LEN F [--bank B] | banks | disasm [ADDR|pc] [N] | where | lines [FICHIER] | segments
 screen [--lower] | capture F.png [--full] | label TEXTE|ADDR | info | ping | quit
 ```
+
+- Infos source : `make` produit `build/<prog>.dbg` (ld65 `--dbgfile`) ; `run.sh --monitor` le copie en `build/vice.dbg` (comme les labels). `where` → `PC=0812 examples/hello_rts/hello_rts.s:17  sta VIC_BORDERCOLOR` ; `lines`/`segments` marchent sans VICE (`--dbgfile build/x.dbg`). Pour le C, ce sont les lignes du `.c` (le `.s` intermédiaire de cc65 est supprimé).
+- `disasm` : désassembleur 6502 de dbg.py (opcodes officiels), labels en opérandes, `>` = PC, `*` = point d'arrêt, lignes `          label:` ; segments non-code (RODATA, DATA, EXEHDR…) en `.byte`. Sans adresse : contexte avant le PC inclus.
+- `next` sur un `JSR` : point d'arrêt (non temporaire) après l'appel puis reprise, car le « step over » de VICE s'arrête dans l'IRQ ; s'arrête sur un point d'arrêt utilisateur rencontré dans le sous-programme ; supprime son point d'arrêt dans tous les cas. Les points d'arrêt **temporaires** de VICE 3.7.1 avalent un autre arrêt survenant juste après la reprise : ne pas les utiliser.
+- `jump ADDR` : place le PC (absorbe le pas « à vide » que VICE fait après un changement de PC). La pile n'est pas réinitialisée : pour relancer proprement un programme revenu au BASIC, préférer `break start` + `type run\n` + `wait`.
+- `type` : clavier du C64 (lettres → majuscules PETSCII, `\n` = RETURN). Inopérant si le programme ne lit pas le clavier (boucle infinie).
+- Banques (`--bank`) : `cpu` (= `default`, vue processeur), `ram` (RAM sous les ROM/E-S), `rom`, `io`, `cart`. En pas à pas, VICE ne redessine pas l'écran : `capture` montre la dernière trame, `screen` la mémoire écran actuelle.
 
 - `capture` : image PNG de l'écran **en direct** via le moniteur (384×272 identique au pixel près à `-exitscreenshot` ; `--full` = 504×312), sans arrêter l'instance. Lire le PNG avec l'outil Read pour voir l'écran.
 
@@ -75,7 +83,9 @@ screen [--lower] | capture F.png [--full] | label TEXTE|ADDR | info | ping | qui
 ### Portail (tools/portal.py)
 
 - Serveur `http.server` (bibliothèque standard) sur 127.0.0.1:8064, joignable depuis Windows via `localhost`. Démarrage : `make portal` (processus, `var/portal.pid`, `var/portal.log` : hors de `build/` que `make clean` efface) ou service systemd utilisateur `c64-portal` (`tools/portal.sh install`, démarre à l'ouverture de la distribution, `KillMode=process` pour que VICE survive à un redémarrage du portail).
-- Programmes (Lancer avec mode/moniteur/warp, Capture bornée, Sources, `.prg`), opérations longues en tâches (une à la fois : build, tests, nettoyage, vérification d'installation), moniteur (image en direct, écran texte, registres, pause/pas/continuer, points d'arrêt, mémoire, labels, console dbg.py générique), journaux, page de cohérence.
+- Programmes (Lancer avec mode/moniteur/warp, Capture bornée, Sources, `.prg`), opérations longues en tâches (une à la fois : build, tests, nettoyage, vérification d'installation), moniteur (image en direct, écran texte, registres, Recommencer pas à pas / Pause / Pas / Pas sans JSR / Continuer, vue **Code** désassemblage + source avec ligne courante et points d'arrêt d'un clic, points d'arrêt, labels, clavier du C64, console dbg.py générique), carte **Mémoire** (64 Ko en image, focus hexa + codes écran/PETSCII/ASCII, sélection à la souris avec valeurs/mots/texte, surveillance, édition par double-clic, octets modifiés surlignés, banques), journaux, page de cohérence.
+- Liens directs : `http://localhost:8064/#mem=0400-04ff` (zone mémoire sélectionnée), `#code=source` ou `#code=disasm` : utile pour montrer quelque chose à l'utilisateur.
+- « Recommencer pas à pas » : si le PC est en ROM (programme revenu au BASIC), point d'arrêt sur le point d'entrée (début de STARTUP/CODE, `$080D`) + `RUN` tapé ; sinon `jump` au point d'entrée.
 - L'état est partagé par fichiers (`build/vice.pid`, `vice.state`, `dbg.sock`) : ce que je lance en ligne de commande apparaît dans le portail et inversement. Le démon dbg.py sert les clients à tour de rôle (file d'attente).
 - API JSON sous `/api/*` (POST exigent `Content-Type: application/json` ; Host/Origin non locaux refusés). Utile pour moi aussi : `curl -s localhost:8064/api/status`.
 

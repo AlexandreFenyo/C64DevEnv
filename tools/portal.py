@@ -107,6 +107,8 @@ DBG_USED = {
     "capture": "onglet « Image » de l'écran (en direct)",
     "regs": "registres",
     "pause": "bouton « Pause »",
+    "jump": "bouton « Recommencer pas à pas » (programme en boucle)",
+    "type": "champ « Clavier du C64 » ; « Recommencer pas à pas » (RUN)",
     "step": "bouton « Pas »",
     "next": "bouton « Pas (sans JSR) »",
     "cont": "bouton « Continuer »",
@@ -117,9 +119,14 @@ DBG_USED = {
     "watch": "points d'arrêt : « Lecture/écriture »",
     "delete": "points d'arrêt : suppression",
     "list": "points d'arrêt : liste",
-    "mem": "mémoire : lecture",
-    "poke": "mémoire : écriture",
+    "poke": "Mémoire : écriture (double-clic sur un octet)",
     "label": "recherche de labels",
+    "disasm": "vue Code : onglet Désassemblage",
+    "where": "vue Code : ligne source courante",
+    "lines": "vue Code : correspondance lignes source <-> adresses (/api/codeinfo)",
+    "segments": "Mémoire : segments du programme sur la carte (/api/codeinfo)",
+    "dump": "Mémoire : lecture des 64 Ko (/api/ram)",
+    "banks": "Mémoire : choix de la banque",
 }
 # Commandes dont un argument est un fichier à écrire : le portail force ce
 # fichier dans build/portal/ (index de l'argument fichier).
@@ -634,6 +641,68 @@ def get_logs(h, q):
                  "text": tail(LOGS[name], lines)})
 
 
+BANK_RE = re.compile(r"^[a-z]{1,16}$")
+
+
+def get_ram(h, q):
+    """Octets bruts de la mémoire (dbg.py dump), pour la carte et le focus."""
+    try:
+        start = int(q.get("start", 0))
+        length = int(q.get("len", 65536))
+    except ValueError:
+        raise ApiError(HTTPStatus.BAD_REQUEST, "start/len invalides")
+    if not (0 <= start <= 0xFFFF and 1 <= length and start + length <= 0x10000):
+        raise ApiError(HTTPStatus.BAD_REQUEST, "plage hors de $0000-$FFFF")
+    bank = q.get("bank", "cpu")
+    if not BANK_RE.match(bank):
+        raise ApiError(HTTPStatus.BAD_REQUEST, "banque invalide")
+    os.makedirs(PORTAL_OUT, exist_ok=True)
+    path = os.path.join(PORTAL_OUT, "ram-%d.bin" % threading.get_ident())
+    r = run_dbg(["dump", str(start), str(length), path, "--bank", bank], timeout=10)
+    if r["rc"] != 0 or not os.path.isfile(path):
+        raise ApiError(HTTPStatus.SERVICE_UNAVAILABLE,
+                       (r["stderr"] or r["stdout"]).strip() or "lecture mémoire impossible")
+    with open(path, "rb") as f:
+        data = f.read()
+    os.unlink(path)
+    h.send_bytes(data, "application/octet-stream")
+
+
+def get_codeinfo(h, q):
+    """Correspondance source <-> adresses et segments d'un programme
+    (dbg.py lines / segments sur build/<prog>.dbg)."""
+    prog = q.get("prog") or vice_info()["prog"]
+    if not prog:
+        raise ApiError(HTTPStatus.NOT_FOUND, "aucun programme en cours")
+    safe_name(prog, "programme")
+    dbgfile = os.path.join(BUILD, prog + ".dbg")
+    if not os.path.isfile(dbgfile):
+        raise ApiError(HTTPStatus.NOT_FOUND, "pas d'infos de débogage pour %s (make)" % prog)
+    lines, files = {}, []
+    r = run_dbg(["--dbgfile", dbgfile, "lines"], timeout=10)
+    for line in r["stdout"].splitlines():
+        m = re.match(r"^(.+):(\d+) \$([0-9a-f]{4})-\$([0-9a-f]{4})$", line)
+        if not m:
+            continue
+        fname = m.group(1)
+        # Seuls les sources du projet sont affichables (route /source/).
+        if not fname.startswith(("src/", "examples/")):
+            continue
+        if fname not in lines:
+            lines[fname] = {}
+            files.append(fname)
+        lines[fname][int(m.group(2))] = [int(m.group(3), 16), int(m.group(4), 16)]
+    segments = []
+    r2 = run_dbg(["--dbgfile", dbgfile, "segments"], timeout=10)
+    for line in r2["stdout"].splitlines():
+        m = re.match(r"^(\S+)\s+\$([0-9a-f]{4})-\$([0-9a-f]{4})", line)
+        if m:
+            segments.append({"name": m.group(1), "start": int(m.group(2), 16),
+                             "end": int(m.group(3), 16)})
+    h.send_json({"prog": prog, "files": files, "lines": lines, "segments": segments,
+                 "mtime": os.path.getmtime(dbgfile)})
+
+
 def get_live(h, q):
     """Image de l'écran en direct (dbg.py capture)."""
     os.makedirs(PORTAL_OUT, exist_ok=True)
@@ -784,6 +853,8 @@ GET_ROUTES = [
     (r"/api/jobs", get_jobs),
     (r"/api/jobs/(\d+)", get_job),
     (r"/api/logs", get_logs),
+    (r"/api/ram", get_ram),
+    (r"/api/codeinfo", get_codeinfo),
 ]
 POST_ROUTES = [
     (r"/api/build", post_build),

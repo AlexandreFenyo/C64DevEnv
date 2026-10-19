@@ -101,26 +101,50 @@
           <div id="live-empty" class="screen-empty">Pas d'image : moniteur indisponible</div>
           <pre id="screen-text" class="c64text" hidden></pre>
         </div>
+        <div class="muted small" id="screen-note" hidden>Émulateur arrêté : l'image est la dernière trame affichée (VICE ne redessine pas en pas à pas). L'onglet « Texte » lit la mémoire écran actuelle.</div>
         <div class="button-row">
-          <button class="btn small" id="screen-refresh">Rafraîchir</button>
+          <button class="btn small ghost" id="screen-refresh">Rafraîchir</button>
           <label class="check"><input type="checkbox" id="screen-auto" checked> Auto (1 s)</label>
           <label class="check"><input type="checkbox" id="screen-lower"> Minuscules</label>
           <a class="btn ghost small" id="screen-save" href="#" download="c64-ecran.png">Enregistrer</a>
         </div>
-      </div>
-
-      <div class="ctl-pane">
         <div class="regs" id="regs">—</div>
-        <div class="button-row">
-          <button class="btn small" data-dbg="pause">Pause</button>
-          <button class="btn small" data-dbg="step">Pas</button>
-          <button class="btn small" data-dbg="next" title="Passe par-dessus les JSR">Pas (sans JSR)</button>
+        <div class="button-row step-row">
+          <button class="btn small" id="restart-step" title="Arrête le programme sur son point d'entrée pour le suivre pas à pas : tape RUN s'il est revenu au BASIC, sinon replace le PC au début (pile conservée)">Recommencer pas à pas</button>
+          <button class="btn small" data-dbg="pause" title="Arrête l'émulateur là où il est">Pause</button>
+          <button class="btn small" data-dbg="step" title="Exécute une instruction (entre dans les JSR)">Pas</button>
+          <button class="btn small" data-dbg="next" title="Exécute une instruction (passe par-dessus les JSR)">Pas (sans JSR)</button>
           <button class="btn small" data-dbg="cont">Continuer</button>
-          <button class="btn small ghost" data-dbg="wait">Attendre l'arrêt</button>
+          <button class="btn small ghost" data-dbg="wait" title="Attend qu'un point d'arrêt soit atteint (10 s)">Attendre l'arrêt</button>
           <button class="btn small ghost" data-dbg="reset">Reset</button>
           <button class="btn small warn" data-dbg="quit">Quitter VICE</button>
         </div>
+      </div>
 
+      <div class="code-pane">
+        <div class="code-head">
+          <div class="tabs" role="tablist">
+            <button class="tab active" data-code="disasm" role="tab">Désassemblage</button>
+            <button class="tab" data-code="source" role="tab">Source</button>
+          </div>
+          <label class="check" title="Recentrer la vue sur l'instruction courante à chaque arrêt"><input type="checkbox" id="code-follow" checked> Suivre le PC</label>
+          <form class="inline-form tight" id="code-goto">
+            <input id="code-addr" placeholder="aller à (label, $0810…)" autocomplete="off">
+            <button class="btn small ghost">Aller</button>
+          </form>
+          <button class="btn small ghost" id="code-refresh">Rafraîchir</button>
+        </div>
+        <div class="code-where" id="code-where">—</div>
+        <div class="code-files tabs" id="code-files" hidden></div>
+        <div class="code-view" id="code-view" tabindex="0">
+          <div class="muted pad">Lancez un programme avec la case « Moniteur », puis Pause ou un point d'arrêt.</div>
+        </div>
+        <div class="muted small">Cliquez dans la marge (●) pour poser ou retirer un point d'arrêt. ▶ = instruction courante.</div>
+      </div>
+    </div>
+
+    <div class="monitor-tools">
+      <div>
         <h3>Points d'arrêt</h3>
         <form class="inline-form" id="bp-form">
           <input id="bp-addr" placeholder="adresse ou label (loop, $0831…)" autocomplete="off">
@@ -128,26 +152,22 @@
           <button class="btn small ghost" data-kind="watch">Lecture/écriture</button>
         </form>
         <ul class="bp-list" id="bp-list"><li class="muted">—</li></ul>
-
-        <h3>Mémoire</h3>
-        <form class="inline-form" id="mem-form">
-          <input id="mem-addr" placeholder="adresse ($0400, 1024, label)" autocomplete="off">
-          <input id="mem-len" type="number" min="1" max="65536" value="64" class="narrow" aria-label="Longueur">
-          <button class="btn small">Lire</button>
-        </form>
-        <form class="inline-form" id="poke-form">
-          <input id="poke-addr" placeholder="adresse" autocomplete="off">
-          <input id="poke-vals" placeholder="valeurs ($41 66 0x42…)" autocomplete="off">
-          <button class="btn small ghost">Écrire</button>
-        </form>
-        <pre id="mem-output" class="console small"></pre>
-
+      </div>
+      <div>
         <h3>Labels</h3>
         <form class="inline-form" id="label-form">
           <input id="label-q" placeholder="rechercher (loop, VIC_, $0831…)" autocomplete="off">
           <button class="btn small ghost">Chercher</button>
         </form>
         <div class="labels" id="label-results"></div>
+      </div>
+      <div>
+        <h3>Clavier du C64</h3>
+        <form class="inline-form" id="type-form">
+          <input id="type-text" placeholder="texte à taper (ex. list, sys 2061)" autocomplete="off">
+          <button class="btn small ghost">Taper</button>
+        </form>
+        <label class="check small"><input type="checkbox" id="type-return" checked> RETURN à la fin</label>
       </div>
     </div>
 
@@ -161,6 +181,74 @@
       <div class="muted small" id="dbg-help"></div>
       <pre id="dbg-output" class="console"></pre>
     </details>
+  </section>
+
+  <section class="card span-2" id="card-memory">
+    <div class="card-head">
+      <h2>Mémoire</h2>
+      <span class="muted" id="mem-hint">Nécessite un programme lancé avec le moniteur.</span>
+    </div>
+    <div class="options">
+      <label>Banque
+        <select id="mem-bank" title="cpu : ce que voit le processeur ; ram : la RAM, y compris sous les ROM ; rom ; io">
+          <option value="cpu">cpu (vue processeur)</option>
+          <option value="ram">ram (sous les ROM)</option>
+          <option value="rom">rom</option>
+          <option value="io">io</option>
+        </select>
+      </label>
+      <label>Zone <select id="mem-region"></select></label>
+      <label>Texte
+        <select id="mem-decode">
+          <option value="screen">codes écran</option>
+          <option value="petscii">PETSCII</option>
+          <option value="ascii">ASCII</option>
+        </select>
+      </label>
+      <button class="btn small" id="mem-refresh">Lire</button>
+      <label class="check"><input type="checkbox" id="mem-auto"> Auto (1 s)</label>
+    </div>
+    <div class="memory">
+      <div class="map-pane">
+        <div class="map-wrap">
+          <div class="map-axis" aria-hidden="true">
+            <span>$0000</span><span>$4000</span><span>$8000</span><span>$C000</span><span>$FFFF</span>
+          </div>
+          <canvas id="mem-map" width="256" height="256" aria-label="Carte des 64 Ko : une ligne par page de 256 octets, un pixel par octet"></canvas>
+        </div>
+        <div class="map-info" id="map-info">Survolez la carte ; cliquez pour examiner une zone.</div>
+        <div class="map-legend" id="map-legend"></div>
+      </div>
+      <div class="hex-pane">
+        <div class="hex-nav">
+          <button class="btn small ghost" data-mem-step="-256" title="Page précédente">«</button>
+          <button class="btn small ghost" data-mem-step="-16" title="Ligne précédente">‹</button>
+          <form class="inline-form tight" id="mem-goto">
+            <input id="mem-addr" placeholder="adresse ou label" autocomplete="off">
+            <button class="btn small ghost">Aller</button>
+          </form>
+          <button class="btn small ghost" data-mem-step="16" title="Ligne suivante">›</button>
+          <button class="btn small ghost" data-mem-step="256" title="Page suivante">»</button>
+          <label>Lignes
+            <select id="mem-rows"><option>8</option><option selected>16</option><option>32</option></select>
+          </label>
+        </div>
+        <div class="hex-view" id="hex-view"><div class="muted pad">—</div></div>
+        <div class="muted small">Glissez pour sélectionner une portion ; double-clic sur un octet pour le modifier. Les octets modifiés depuis la lecture précédente sont surlignés.</div>
+        <div class="selection" id="mem-selection" hidden>
+          <div class="sel-head">
+            <strong id="sel-range"></strong>
+            <div class="button-row">
+              <button class="btn small ghost" id="sel-copy-hex">Copier hexa</button>
+              <button class="btn small ghost" id="sel-copy-text">Copier texte</button>
+              <button class="btn small ghost" id="sel-watch" title="Point d'arrêt en lecture/écriture sur la sélection">Surveiller</button>
+              <button class="btn small ghost" id="sel-disasm">Désassembler ici</button>
+            </div>
+          </div>
+          <dl class="sel-values" id="sel-values"></dl>
+        </div>
+      </div>
+    </div>
   </section>
 
   <section class="card" id="card-logs">

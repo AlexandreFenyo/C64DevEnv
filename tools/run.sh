@@ -120,6 +120,12 @@ if [ "$MONITOR" = 1 ]; then
         echo "run.sh: pas de fichier de labels $LABELS (make ?)" >&2
         rm -f "$BUILD/vice.labels"
     fi
+    # Idem pour les infos de débogage (dbg.py where/lines/disasm).
+    if [ -f "${PRG%.prg}.dbg" ]; then
+        cp -f "${PRG%.prg}.dbg" "$BUILD/vice.dbg"
+    else
+        rm -f "$BUILD/vice.dbg"
+    fi
 fi
 
 case "$MODE" in

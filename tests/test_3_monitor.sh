@@ -90,6 +90,35 @@ $DBG dump '$02FE' 2 build/test_dump.bin >/dev/null || fail "dump"
 [ "$(od -An -tx1 build/test_dump.bin | tr -d ' \n')" = "9942" ] || fail "dump : contenu inattendu"
 echo "ok : poke/dump"
 
+# Infos source (build/vice.dbg), désassemblage, banques mémoire.
+w="$($DBG where)" || fail "where"
+echo "$w" | grep -q "^PC=0831 (loop) examples/hello/hello.s:38  jmp loop" || fail "where : '$w'"
+d="$($DBG disasm)" || fail "disasm"
+echo "$d" | grep -qE '^>   0831  4c 31 08  JMP loop$' || fail "disasm : instruction courante absente : $d"
+echo "$d" | grep -qE '^          message:$' || fail "disasm : label message absent"
+echo "$d" | grep -qE '\.byte \$48,\$45,\$4c' || fail "disasm : RODATA non affiché en .byte"
+$DBG lines hello.s | grep -qx 'examples/hello/hello.s:18 $080d-$080f' || fail "lines : jsr CLRSCR en \$080d attendu"
+$DBG segments | grep -qE '^CODE +\$080d-' || fail "segments : CODE en \$080d attendu"
+$DBG banks | grep -qx 'bank 1 ram' || fail "banks : banque ram attendue"
+[ "$($DBG mem '$a000' 2 --bank rom | cut -c7-11)" = "94 e3" ] || fail "mem --bank rom : vecteur BASIC \$e394 attendu en \$a000"
+echo "ok : where, disasm, lines, segments, banks, --bank"
+
+# Pas à pas depuis l'entrée : jump, next par-dessus un JSR (sans s'arrêter
+# dans l'IRQ), step, where sur la bonne ligne source.
+$DBG jump start | grep -qx 'stopped PC=080d (start)' || fail "jump start"
+$DBG next | grep -q 'PC=0810' || fail "next par-dessus JSR CLRSCR : PC=0810 attendu"
+$DBG step | grep -q 'PC=0812' || fail "step : PC=0812 attendu"
+$DBG where | grep -q 'hello.s:20  sta VIC_BORDERCOLOR' || fail "where après step : ligne 20 attendue"
+# next avec un point d'arrêt dans le sous-programme : arrêt dessus.
+$DBG jump start >/dev/null
+$DBG break '$e544' >/dev/null
+$DBG next | grep -q 'PC=e544' || fail "next : arrêt sur le point d'arrêt dans le sous-programme attendu"
+$DBG delete 1 >/dev/null
+[ "$($DBG list)" = "no checkpoints" ] || fail "next ne doit laisser aucun point d'arrêt temporaire"
+$DBG jump loop >/dev/null
+$DBG cont >/dev/null
+echo "ok : jump, next (JSR), step, point d'arrêt dans un sous-programme"
+
 # Arrêt propre via le moniteur, puis plus aucun x64sc vivant.
 $DBG quit >/dev/null || fail "quit"
 for _ in $(seq 1 50); do
@@ -101,4 +130,14 @@ if ps -u "$(id -u)" -o stat=,comm= | grep -qE '^[^Z]\S* +x64sc$'; then
     fail "x64sc encore vivant après quit"
 fi
 echo "ok : VICE arrêté proprement"
+
+# Relance au clavier : hello_rts revient au BASIC ; point d'arrêt sur
+# l'entrée, « run » tapé au clavier, arrêt attendu sur start.
+tools/run.sh --headless --warp --monitor build/hello_rts.prg >/dev/null || fail "run.sh hello_rts"
+$DBG break start >/dev/null || fail "break start (hello_rts)"
+$DBG type 'run\n' | grep -qx 'typed 4 chars' || fail "type run"
+$DBG wait 5 | grep -q '^stopped PC=080d (start)' || fail "RUN tapé : arrêt sur start attendu"
+$DBG where | grep -q 'hello_rts.s:15  jsr CLRSCR' || fail "where (hello_rts)"
+tools/stop.sh --quiet
+echo "ok : type (RUN au clavier) puis arrêt sur le point d'entrée"
 echo "Monitor OK"

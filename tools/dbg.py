@@ -8,7 +8,7 @@ Usage : dbg.py [--port P] [--labels FICHIER] [--timeout S] COMMANDE [ARGS...]
 
 Commandes :
   regs                    registres : A X Y SP PC FLAGS
-  mem ADDR [LEN]          hexdump (LEN défaut 64)
+  mem ADDR [LEN] [--bank B]  hexdump (LEN défaut 64 ; B : banque, voir banks)
   poke ADDR VAL [VAL...]  écrit un ou plusieurs octets
   break ADDR [ADDR2]      point d'arrêt à l'exécution (plage optionnelle)
   watch ADDR [ADDR2]      point d'arrêt en lecture/écriture
@@ -17,11 +17,18 @@ Commandes :
   step [N]                exécute N instructions (défaut 1), reste arrêté
   next                    comme step mais passe par-dessus les JSR
   pause                   arrête l'émulateur là où il est (sans exécuter d'instruction)
+  jump ADDR               place le PC sur ADDR sans rien exécuter (l'émulateur reste arrêté)
+  type TEXTE...           tape au clavier du C64 (\\n = RETURN), ex. : type run\\n
   cont                    reprend l'exécution
   wait [SECONDES]         attend l'arrêt sur un point d'arrêt (défaut 10 s)
   status                  running|stopped + PC, sans toucher à l'émulateur
   reset [hard]            reset logiciel du C64 ("reset hard" : matériel)
-  dump ADDR LEN FICHIER   sauve LEN octets dans un fichier binaire
+  dump ADDR LEN F [--bank B]  sauve LEN octets dans le fichier binaire F
+  banks                   banques mémoire de VICE (default, cpu, ram, rom, io...)
+  disasm [ADDR|pc] [N]    désassemble N instructions (défaut 20, autour du PC ; > = PC, * = point d'arrêt)
+  where                   ligne source de l'instruction courante (PC)
+  lines [FICHIER]         lignes source -> adresses, d'après le fichier .dbg (sans VICE)
+  segments                segments du programme : CODE, RODATA, DATA, BSS... (sans VICE)
   screen [--lower]        mémoire écran ($0400-$07E7) rendue en texte
   capture F.png [--full]  image de l'écran en direct (PNG 384x272 ; --full : 504x312)
   label TEXTE|ADDR        recherche un symbole (sous-chaîne) ou une adresse
@@ -36,6 +43,8 @@ construire sa console. Toute commande ajoutée à COMMANDS doit y figurer.)
 Adresses : décimal (1024), $hexa ($0400), 0xhexa (0x400), nom de label
 (start, .start), ou label+/-décalage (start+3). Les labels viennent de
 --labels, de $C64_LABELS ou de build/vice.labels (écrit par run.sh).
+Les infos source (where, lines, disasm) viennent de --dbgfile, de
+$C64_DBGFILE ou de build/vice.dbg (copie de build/<prog>.dbg par run.sh).
 
 Fonctionnement : VICE ne garde un point d'arrêt actif, et ne reste arrêté,
 que tant qu'un client du moniteur binaire est connecté. dbg.py passe donc
@@ -51,6 +60,7 @@ Codes de sortie : 0 ok, 1 erreur de commande, 2 VICE injoignable,
 import argparse
 import collections
 import os
+import re
 import selectors
 import socket
 import struct
@@ -78,6 +88,7 @@ CMD_REGISTERS_SET = 0x32
 CMD_ADVANCE = 0x71
 CMD_KEYBOARD_FEED = 0x72
 CMD_PING = 0x81
+CMD_BANKS_AVAILABLE = 0x82
 CMD_REGISTERS_AVAILABLE = 0x83
 CMD_DISPLAY_GET = 0x84
 CMD_VICE_INFO = 0x85
@@ -162,6 +173,215 @@ class Labels:
     def name_of(self, addr):
         names = self.by_addr.get(addr)
         return names[0] if names else None
+
+    def symbol(self, addr, digits=4):
+        """Nom pour un opérande : label exact (hors __internes__), sinon
+        label+1 (octet haut d'un pointeur), sinon hexa."""
+        for a, suffix in ((addr, ""), (addr - 1, "+1")):
+            names = [n for n in self.by_addr.get(a, []) if not n.startswith("__")]
+            if names:
+                return names[0] + suffix
+        return "$%0*x" % (digits, addr)
+
+
+# ---------------------------------------------------------------------------
+# Infos de débogage ld65 (--dbgfile) : adresse <-> fichier:ligne
+# ---------------------------------------------------------------------------
+DBG_FIELD_RE = re.compile(r'(\w+)=("(?:[^"\\]|\\.)*"|[^,]*)')
+
+
+class DebugInfo:
+    """Lit build/<prog>.dbg. Une ligne source couvre une ou plusieurs plages
+    (span) d'un segment. Type 1 = ligne C (cc65 -g), 0 = assembleur."""
+
+    def __init__(self, path):
+        self.path = path
+        self.files = {}
+        self.entries = []    # (début, fin, fichier, ligne, type)
+        self.segments = []   # (début, fin, nom)
+        if not path or not os.path.isfile(path):
+            return
+        segs, spans, lines = {}, {}, []
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for raw in f:
+                kind, _, rest = raw.rstrip("\n").partition("\t")
+                if kind not in ("file", "seg", "span", "line"):
+                    continue
+                d = {k: v.strip('"') for k, v in DBG_FIELD_RE.findall(rest)}
+                if kind == "file":
+                    self.files[int(d["id"])] = d["name"]
+                elif kind == "seg":
+                    start, size = int(d["start"], 16), int(d["size"], 16)
+                    segs[int(d["id"])] = start
+                    if size:
+                        self.segments.append((start, start + size - 1, d["name"]))
+                elif kind == "span":
+                    spans[int(d["id"])] = (int(d["seg"]), int(d["start"]), int(d["size"]))
+                else:
+                    lines.append(d)
+        for d in lines:
+            line = int(d.get("line", 0))
+            if "span" not in d or line <= 0:
+                continue
+            for sid in d["span"].split("+"):
+                seg, off, size = spans[int(sid)]
+                if size > 0:
+                    start = segs[seg] + off
+                    self.entries.append((start, start + size - 1, self.files[int(d["file"])],
+                                         line, int(d.get("type", 0))))
+
+    @property
+    def loaded(self):
+        return bool(self.entries)
+
+    def at(self, addr):
+        """(fichier, ligne) de l'adresse : ligne C d'abord (le .s
+        intermédiaire de cc65 est supprimé), fichier existant, plage la
+        plus étroite."""
+        best = None
+        for start, end, fname, line, typ in self.entries:
+            if start <= addr <= end:
+                key = (typ != 1, not os.path.isfile(source_path(fname)), end - start)
+                if best is None or key < best[0]:
+                    best = (key, fname, line)
+        return (best[1], best[2]) if best else None
+
+    def segment_of(self, addr):
+        for start, end, name in self.segments:
+            if start <= addr <= end:
+                return start, end, name
+        return None
+
+    def line_table(self, only_existing=True):
+        """{(fichier, ligne): (début, fin)} ; une ligne C pouvant couvrir
+        plusieurs plages, on garde la plus basse adresse de début."""
+        table = {}
+        for start, end, fname, line, typ in self.entries:
+            if only_existing and not os.path.isfile(source_path(fname)):
+                continue
+            key = (fname, line)
+            if key not in table or start < table[key][0]:
+                table[key] = (start, end)
+        return table
+
+
+def source_path(fname):
+    return fname if os.path.isabs(fname) else os.path.join(ROOT, fname)
+
+
+def source_text(fname, line):
+    try:
+        with open(source_path(fname), encoding="utf-8", errors="replace") as f:
+            for i, text in enumerate(f, 1):
+                if i == line:
+                    return text.strip()
+    except OSError:
+        pass
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Désassembleur 6502 (opcodes officiels)
+# ---------------------------------------------------------------------------
+MODE_SIZE = {"imp": 1, "acc": 1, "imm": 2, "zp": 2, "zpx": 2, "zpy": 2, "izx": 2,
+             "izy": 2, "rel": 2, "abs": 3, "absx": 3, "absy": 3, "ind": 3}
+OPCODES = {}
+
+
+def _build_opcodes():
+    alu = ("imm", "zp", "zpx", "abs", "absx", "absy", "izx", "izy")
+    for mn, codes in (("ORA", (0x09, 0x05, 0x15, 0x0D, 0x1D, 0x19, 0x01, 0x11)),
+                      ("AND", (0x29, 0x25, 0x35, 0x2D, 0x3D, 0x39, 0x21, 0x31)),
+                      ("EOR", (0x49, 0x45, 0x55, 0x4D, 0x5D, 0x59, 0x41, 0x51)),
+                      ("ADC", (0x69, 0x65, 0x75, 0x6D, 0x7D, 0x79, 0x61, 0x71)),
+                      ("LDA", (0xA9, 0xA5, 0xB5, 0xAD, 0xBD, 0xB9, 0xA1, 0xB1)),
+                      ("CMP", (0xC9, 0xC5, 0xD5, 0xCD, 0xDD, 0xD9, 0xC1, 0xD1)),
+                      ("SBC", (0xE9, 0xE5, 0xF5, 0xED, 0xFD, 0xF9, 0xE1, 0xF1))):
+        for mode, code in zip(alu, codes):
+            OPCODES[code] = (mn, mode)
+    for mode, code in zip(alu[1:], (0x85, 0x95, 0x8D, 0x9D, 0x99, 0x81, 0x91)):
+        OPCODES[code] = ("STA", mode)
+    for mn, codes in (("ASL", (0x0A, 0x06, 0x16, 0x0E, 0x1E)), ("ROL", (0x2A, 0x26, 0x36, 0x2E, 0x3E)),
+                      ("LSR", (0x4A, 0x46, 0x56, 0x4E, 0x5E)), ("ROR", (0x6A, 0x66, 0x76, 0x6E, 0x7E))):
+        for mode, code in zip(("acc", "zp", "zpx", "abs", "absx"), codes):
+            OPCODES[code] = (mn, mode)
+    for mn, codes in (("INC", (0xE6, 0xF6, 0xEE, 0xFE)), ("DEC", (0xC6, 0xD6, 0xCE, 0xDE))):
+        for mode, code in zip(("zp", "zpx", "abs", "absx"), codes):
+            OPCODES[code] = (mn, mode)
+    table = {
+        "LDX": {"imm": 0xA2, "zp": 0xA6, "zpy": 0xB6, "abs": 0xAE, "absy": 0xBE},
+        "LDY": {"imm": 0xA0, "zp": 0xA4, "zpx": 0xB4, "abs": 0xAC, "absx": 0xBC},
+        "STX": {"zp": 0x86, "zpy": 0x96, "abs": 0x8E},
+        "STY": {"zp": 0x84, "zpx": 0x94, "abs": 0x8C},
+        "CPX": {"imm": 0xE0, "zp": 0xE4, "abs": 0xEC},
+        "CPY": {"imm": 0xC0, "zp": 0xC4, "abs": 0xCC},
+        "BIT": {"zp": 0x24, "abs": 0x2C},
+        "JMP": {"abs": 0x4C, "ind": 0x6C},
+        "JSR": {"abs": 0x20},
+    }
+    for mn, modes in table.items():
+        for mode, code in modes.items():
+            OPCODES[code] = (mn, mode)
+    for mn, code in (("BPL", 0x10), ("BMI", 0x30), ("BVC", 0x50), ("BVS", 0x70),
+                     ("BCC", 0x90), ("BCS", 0xB0), ("BNE", 0xD0), ("BEQ", 0xF0)):
+        OPCODES[code] = (mn, "rel")
+    for mn, code in (("BRK", 0x00), ("PHP", 0x08), ("CLC", 0x18), ("PLP", 0x28), ("SEC", 0x38),
+                     ("RTI", 0x40), ("PHA", 0x48), ("CLI", 0x58), ("RTS", 0x60), ("PLA", 0x68),
+                     ("SEI", 0x78), ("DEY", 0x88), ("TXA", 0x8A), ("TYA", 0x98), ("TXS", 0x9A),
+                     ("TAY", 0xA8), ("TAX", 0xAA), ("CLV", 0xB8), ("TSX", 0xBA), ("INY", 0xC8),
+                     ("DEX", 0xCA), ("CLD", 0xD8), ("INX", 0xE8), ("NOP", 0xEA), ("SED", 0xF8)):
+        OPCODES[code] = (mn, "imp")
+
+
+_build_opcodes()
+assert len(OPCODES) == 151, len(OPCODES)
+
+
+def decode(mem, base, addr, labels):
+    """(taille, octets, texte) de l'instruction en addr ; mem commence en base."""
+    i = addr - base
+    op = mem[i] if 0 <= i < len(mem) else None
+    if op is None or op not in OPCODES or i + MODE_SIZE[OPCODES[op][1]] > len(mem):
+        return 1, mem[i:i + 1], ".byte $%02x" % op if op is not None else "?"
+    mn, mode = OPCODES[op]
+    size = MODE_SIZE[mode]
+    raw = mem[i:i + size]
+    lo = raw[1] if size > 1 else 0
+    word = lo | (raw[2] << 8) if size == 3 else lo
+    fmt = {
+        "imp": "", "acc": "a", "imm": "#$%02x" % lo,
+        "zp": labels.symbol(lo, 2), "zpx": labels.symbol(lo, 2) + ",x",
+        "zpy": labels.symbol(lo, 2) + ",y", "izx": "(%s,x)" % labels.symbol(lo, 2),
+        "izy": "(%s),y" % labels.symbol(lo, 2), "abs": labels.symbol(word),
+        "absx": labels.symbol(word) + ",x", "absy": labels.symbol(word) + ",y",
+        "ind": "(%s)" % labels.symbol(word),
+        "rel": labels.symbol((addr + 2 + (lo - 256 if lo > 127 else lo)) & 0xFFFF),
+    }[mode]
+    return size, raw, (mn + " " + fmt).rstrip()
+
+
+def find_start(mem, base, pc, before, low):
+    """Adresse de départ pour avoir `before` instructions avant pc. Le 6502
+    n'a pas de longueur fixe : on essaie des départs en amont et on garde
+    ceux dont le décodage retombe exactement sur pc (de préférence un label)."""
+    candidates = []
+    for back in range(min(3 * before, pc - low), 0, -1):
+        start, addr, n = pc - back, pc - back, 0
+        while addr < pc:
+            op = mem[addr - base]
+            if op not in OPCODES:
+                break
+            addr += MODE_SIZE[OPCODES[op][1]]
+            n += 1
+        if addr == pc:
+            candidates.append((n, start))
+    if not candidates:
+        return pc
+    n, start = max(candidates)
+    while n > before:  # trop de contexte : on avance d'une instruction
+        start += MODE_SIZE[OPCODES[mem[start - base]][1]]
+        n -= 1
+    return start
 
 
 def parse_int(text):
@@ -510,10 +730,38 @@ class Monitor:
     def exit_monitor(self):
         self.call(CMD_EXIT)
 
-    def mem_get(self, start, end):
-        resp = self.call(CMD_MEM_GET, struct.pack("<BHHBH", 0, start, end, 0, 0))
-        (length,) = struct.unpack("<H", resp.body[:2])
-        return resp.body[2:2 + length]
+    def mem_get(self, start, end, bank=0):
+        """Octets start..end (inclus), sans effet de bord sur les E/S. Par
+        blocs de 32 Ko : la longueur de réponse tient sur 16 bits."""
+        data = b""
+        while start <= end:
+            stop = min(end, start + 0x7FFF)
+            resp = self.call(CMD_MEM_GET, struct.pack("<BHHBH", 0, start, stop, 0, bank))
+            (length,) = struct.unpack("<H", resp.body[:2])
+            data += resp.body[2:2 + length]
+            start = stop + 1
+        return data
+
+    def banks(self):
+        """{nom: id} des banques mémoire de la machine émulée."""
+        body = self.call(CMD_BANKS_AVAILABLE).body
+        (count,) = struct.unpack("<H", body[:2])
+        pos, banks = 2, collections.OrderedDict()
+        for _ in range(count):
+            size = body[pos]
+            bid = struct.unpack("<H", body[pos + 1:pos + 3])[0]
+            nlen = body[pos + 3]
+            banks[body[pos + 4:pos + 4 + nlen].decode("ascii", "replace")] = bid
+            pos += 1 + size
+        return banks
+
+    def bank_id(self, name):
+        if name is None:
+            return 0
+        banks = self.banks()
+        if name in banks:
+            return banks[name]
+        raise DbgError("banque inconnue : %s (disponibles : %s)" % (name, ", ".join(banks)))
 
     def mem_set(self, start, data):
         self.call(CMD_MEM_SET, struct.pack("<BHHBH", 0, start, start + len(data) - 1, 0, 0) + data)
@@ -541,6 +789,18 @@ class Monitor:
             values[names.get(rid, ("R%d" % rid, 16))[0]] = val
             pos += 1 + size
         return values
+
+    def set_register(self, name, value):
+        ids = {n: rid for rid, (n, _) in self.registers_available().items()}
+        if name not in ids:
+            raise DbgError("registre inconnu : %s" % name)
+        body = struct.pack("<BHBBH", 0, 1, 3, ids[name], value & 0xFFFF)
+        self.call(CMD_REGISTERS_SET, body)
+
+    def keyboard_feed(self, petscii):
+        for i in range(0, len(petscii), 255):
+            chunk = petscii[i:i + 255]
+            self.call(CMD_KEYBOARD_FEED, bytes([len(chunk)]) + chunk)
 
     def checkpoint_set(self, start, end, op, stop=True, temporary=False):
         body = struct.pack("<HHBBBBB", start, end, 1 if stop else 0, 1, op,
@@ -722,13 +982,31 @@ def cmd_regs(mon, labels, args):
     print(fmt_regs(mon.registers()))
 
 
+def pop_option(args, name):
+    """Retire « name VALEUR » de args et renvoie VALEUR (ou None)."""
+    if name in args:
+        i = args.index(name)
+        if i + 1 >= len(args):
+            raise DbgError("%s attend une valeur" % name)
+        value = args[i + 1]
+        del args[i:i + 2]
+        return value
+    return None
+
+
 def cmd_mem(mon, labels, args):
-    need(args, 1, "mem ADDR [LEN]")
+    bank = pop_option(args, "--bank")
+    need(args, 1, "mem ADDR [LEN] [--bank B]")
     addr = parse_addr(args[0], labels)
     length = parse_int(args[1]) if len(args) > 1 else 64
     if length < 1 or addr + length - 1 > 0xFFFF:
         raise DbgError("plage mémoire invalide")
-    print(hexdump(addr, mon.mem_get(addr, addr + length - 1)))
+    print(hexdump(addr, mon.mem_get(addr, addr + length - 1, mon.bank_id(bank))))
+
+
+def cmd_banks(mon, labels, args):
+    for name, bid in mon.banks().items():
+        print("bank %d %s" % (bid, name))
 
 
 def cmd_poke(mon, labels, args):
@@ -775,9 +1053,44 @@ def cmd_step(mon, labels, args, step_over=False):
     count = parse_int(args[0]) if args else 1
     if not 1 <= count <= 0xFFFF:
         raise DbgError("nombre de pas invalide")
-    mon.advance(count, step_over)
     mon.was_stopped = True  # rester arrêté après un pas
+    if not step_over:
+        mon.advance(count, False)
+    else:
+        for _ in range(count):
+            if not step_over_once(mon, labels):
+                break
     print(fmt_regs(mon.registers()))
+
+
+def step_over_once(mon, labels, timeout=10.0):
+    """Un pas sans entrer dans les JSR. Le « step over » de VICE s'arrête
+    dans le gestionnaire d'IRQ si une interruption survient pendant le
+    sous-programme : on pose plutôt un point d'arrêt temporaire après le
+    JSR et on laisse tourner. Renvoie False si l'arrêt a eu lieu ailleurs
+    (point d'arrêt de l'utilisateur) ou n'a pas eu lieu."""
+    pc = mon.registers().get("PC", 0)
+    if mon.mem_get(pc, pc)[0] != 0x20 or pc > 0xFFFC:  # pas un JSR
+        mon.advance(1, False)
+        return True
+    ret = pc + 3
+    # Point d'arrêt NON temporaire, supprimé par nos soins : avec un point
+    # d'arrêt temporaire, VICE 3.7.1 ignore un autre point d'arrêt atteint
+    # juste après la reprise (ex. sur la 1re instruction du sous-programme).
+    cp = mon.checkpoint_set(ret, ret, OP_EXEC)
+    try:
+        mon.exit_monitor()
+        stopped = mon.wait_stopped(timeout)
+    finally:
+        try:
+            mon.checkpoint_delete(cp["num"])
+        except DbgError:
+            pass
+    if stopped is None:
+        mon.was_stopped = False
+        raise Timeout("le sous-programme appelé en $%04x n'est pas revenu en %.0f s "
+                      "(l'émulateur continue ; pause pour l'arrêter)" % (pc, timeout))
+    return stopped == ret  # sinon : arrêt sur un point d'arrêt de l'utilisateur
 
 
 def cmd_next(mon, labels, args):
@@ -792,6 +1105,48 @@ def cmd_pause(mon, labels, args):
     pc = mon.registers().get("PC", 0)
     name = labels.name_of(pc)
     print("stopped PC=%04x%s" % (pc, " (%s)" % name if name else ""))
+
+
+def cmd_jump(mon, labels, args):
+    need(args, 1, "jump ADDR")
+    addr = parse_addr(args[0], labels)
+    if not mon.status()["stopped"]:
+        mon.ping()
+    mon.set_register("PC", addr)
+    # VICE 3.7.1 : le premier « advance » après un changement de PC
+    # n'exécute rien. On le consomme ici pour que le pas suivant de
+    # l'utilisateur avance vraiment ; si une autre version exécute bien
+    # l'instruction, on replace le PC.
+    mon.advance(1, False)
+    if mon.registers().get("PC") != addr:
+        mon.set_register("PC", addr)
+    mon.was_stopped = True
+    name = labels.name_of(addr)
+    print("stopped PC=%04x%s" % (addr, " (%s)" % name if name else ""))
+
+
+def to_petscii(text):
+    """Texte -> PETSCII pour le clavier : lettres en majuscules (jeu de
+    caractères par défaut), \\n -> RETURN ($0d)."""
+    out = bytearray()
+    for ch in text.replace("\\n", "\r").replace("\n", "\r"):
+        c = ord(ch)
+        if ch == "\r":
+            out.append(0x0D)
+        elif "a" <= ch <= "z":
+            out.append(c - 32)
+        elif 32 <= c < 127:
+            out.append(c)
+        else:
+            raise DbgError("caractère non tapable : %r" % ch)
+    return bytes(out)
+
+
+def cmd_type(mon, labels, args):
+    need(args, 1, "type TEXTE...")
+    data = to_petscii(" ".join(args))
+    mon.keyboard_feed(data)
+    print("typed %d chars" % len(data))
 
 
 def cmd_cont(mon, labels, args):
@@ -834,12 +1189,13 @@ def cmd_reset(mon, labels, args):
 
 
 def cmd_dump(mon, labels, args):
-    need(args, 3, "dump ADDR LEN FICHIER")
+    bank = pop_option(args, "--bank")
+    need(args, 3, "dump ADDR LEN FICHIER [--bank B]")
     addr = parse_addr(args[0], labels)
     length = parse_int(args[1])
     if length < 1 or addr + length - 1 > 0xFFFF:
         raise DbgError("plage mémoire invalide")
-    data = mon.mem_get(addr, addr + length - 1)
+    data = mon.mem_get(addr, addr + length - 1, mon.bank_id(bank))
     with open(args[2], "wb") as f:
         f.write(data)
     print("dump %04x-%04x (%d bytes) -> %s" % (addr, addr + length - 1, len(data), args[2]))
@@ -892,6 +1248,94 @@ def cmd_label(mon, labels, args):
         print("%s = $%04x" % (n, addr))
 
 
+def debug_info():
+    """Infos de débogage du programme courant (chargées à la demande)."""
+    if "dbginfo" not in CONTEXT:
+        CONTEXT["dbginfo"] = DebugInfo(CONTEXT.get("dbgfile"))
+    return CONTEXT["dbginfo"]
+
+
+CONTEXT = {}
+# Segments ld65 contenant du code (les autres sont affichés en .byte).
+CODE_SEGMENTS = {"CODE", "STARTUP", "ONCE", "LOWCODE", "INIT"}
+
+
+def cmd_disasm(mon, labels, args):
+    """disasm [ADDR|pc] [N] : sans ADDR (ou "pc"), autour du PC (contexte
+    avant inclus)."""
+    regs = mon.registers()
+    pc = regs.get("PC", 0)
+    count = parse_int(args[1]) if len(args) > 1 else 20
+    if not 1 <= count <= 500:
+        raise DbgError("N hors de 1-500")
+    dbgi = debug_info()
+    if args and args[0].lower() != "pc":
+        start = parse_addr(args[0], labels)
+        base = start
+        mem = mon.mem_get(base, min(0xFFFF, start + 3 * count + 2))
+    else:
+        before = min(6, count // 3)
+        seg = dbgi.segment_of(pc)
+        low = max(0, seg[0] if seg else pc - 3 * before)
+        base = max(0, min(low, pc - 3 * before))
+        mem = mon.mem_get(base, min(0xFFFF, pc + 3 * count + 2))
+        start = find_start(mem, base, pc, before, low)
+    bps = [(cp["start"], cp["end"]) for cp in mon.checkpoint_list() if cp["op"] & OP_EXEC]
+    addr = start
+    for _ in range(count):
+        if addr > 0xFFFF or addr - base >= len(mem):
+            break
+        for name in [n for n in labels.by_addr.get(addr, []) if not n.startswith("__")][:1]:
+            print("          %s:" % name)
+        seg = dbgi.segment_of(addr)
+        if seg and seg[2] not in CODE_SEGMENTS:
+            # Données (RODATA, DATA, en-tête BASIC...) : .byte, 8 par ligne,
+            # sans dépasser le segment ni le label suivant.
+            size = 1
+            while (size < 8 and addr + size <= seg[1] and addr + size - base < len(mem)
+                   and not labels.by_addr.get(addr + size)):
+                size += 1
+            raw = mem[addr - base:addr - base + size]
+            text = ".byte " + ",".join("$%02x" % b for b in raw)
+            raw = raw[:3]  # colonne octets : 3 premiers
+        else:
+            size, raw, text = decode(mem, base, addr, labels)
+        mark = ">" if addr == pc else " "
+        bp = "*" if any(s <= addr <= e for s, e in bps) else " "
+        print("%s%s  %04x  %-8s  %s" % (mark, bp, addr, " ".join("%02x" % b for b in raw), text))
+        addr += size
+
+
+def cmd_where(mon, labels, args):
+    pc = mon.registers().get("PC", 0)
+    name = labels.name_of(pc)
+    head = "PC=%04x%s" % (pc, " (%s)" % name if name else "")
+    loc = debug_info().at(pc)
+    if loc is None:
+        print("%s (pas d'info source)" % head)
+    else:
+        print("%s %s:%d  %s" % (head, loc[0], loc[1], source_text(*loc)))
+
+
+def cmd_lines(mon, labels, args):
+    dbgi = debug_info()
+    if not dbgi.loaded:
+        raise DbgError("pas d'infos de débogage (%s) : make, puis run.sh --monitor"
+                       % (CONTEXT.get("dbgfile") or "build/vice.dbg"))
+    flt = args[0] if args else ""
+    for (fname, line), (start, end) in sorted(dbgi.line_table().items()):
+        if flt in fname:
+            print("%s:%d $%04x-$%04x" % (fname, line, start, end))
+
+
+def cmd_segments(mon, labels, args):
+    dbgi = debug_info()
+    if not dbgi.segments:
+        raise DbgError("pas d'infos de débogage (%s)" % (CONTEXT.get("dbgfile") or "build/vice.dbg"))
+    for start, end, name in sorted(dbgi.segments):
+        print("%-10s $%04x-$%04x %5d" % (name, start, end, end - start + 1))
+
+
 def cmd_info(mon, labels, args):
     ver, rev = mon.vice_info()
     print("VICE %s (rev %d)" % (ver, rev))
@@ -911,13 +1355,15 @@ def cmd_ping(mon, labels, args):
 COMMANDS = {
     "regs": cmd_regs, "mem": cmd_mem, "poke": cmd_poke, "break": cmd_break,
     "watch": cmd_watch, "delete": cmd_delete, "list": cmd_list, "step": cmd_step,
-    "next": cmd_next, "pause": cmd_pause, "cont": cmd_cont, "wait": cmd_wait,
+    "next": cmd_next, "pause": cmd_pause, "jump": cmd_jump, "type": cmd_type,
+    "cont": cmd_cont, "wait": cmd_wait,
     "status": cmd_status,
-    "reset": cmd_reset, "dump": cmd_dump, "screen": cmd_screen, "capture": cmd_capture,
-    "label": cmd_label,
+    "reset": cmd_reset, "dump": cmd_dump, "banks": cmd_banks, "disasm": cmd_disasm,
+    "where": cmd_where, "lines": cmd_lines, "segments": cmd_segments, "screen": cmd_screen,
+    "capture": cmd_capture, "label": cmd_label,
     "info": cmd_info, "quit": cmd_quit, "ping": cmd_ping,
 }
-OFFLINE = {"label"}            # sans VICE
+OFFLINE = {"label", "lines", "segments"}  # sans VICE
 NO_WAIT = {"status", "ping"}   # répondues sans envoyer de commande à VICE
 AUTOSTART_WAIT = 30            # secondes
 
@@ -939,11 +1385,17 @@ def wait_autostart():
         if time.monotonic() >= deadline:
             raise Timeout("autostart toujours en cours après %d s (build/vice.state)" % AUTOSTART_WAIT)
         time.sleep(0.1)
+
+
 KEEP_STATE = {"cont", "quit"}  # ne pas relancer l'émulateur après coup
 
 
 def default_labels_path():
     return os.environ.get("C64_LABELS", os.path.join(BUILD, "vice.labels"))
+
+
+def default_dbgfile_path():
+    return os.environ.get("C64_DBGFILE", os.path.join(BUILD, "vice.dbg"))
 
 
 def main(argv=None):
@@ -952,6 +1404,8 @@ def main(argv=None):
         epilog="Liste des commandes et syntaxe des adresses : en-tête de tools/dbg.py.")
     ap.add_argument("--port", type=int, default=int(os.environ.get("C64_MONITOR_PORT", 6502)))
     ap.add_argument("--labels", default=default_labels_path())
+    ap.add_argument("--dbgfile", default=default_dbgfile_path(),
+                    help="infos de débogage ld65 (where, lines, disasm)")
     ap.add_argument("--timeout", type=float, default=5.0)
     ap.add_argument("--sock", default=None, help="socket Unix du démon")
     ap.add_argument("--daemon", action="store_true", help="mode démon (usage interne)")
@@ -969,6 +1423,7 @@ def main(argv=None):
         ap.error("commande manquante")
 
     labels = Labels(opts.labels)
+    CONTEXT["dbgfile"] = opts.dbgfile
     handler = COMMANDS[opts.command]
     mon = None
     try:

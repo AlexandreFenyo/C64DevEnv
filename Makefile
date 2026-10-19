@@ -54,12 +54,14 @@ $(BUILD):
 # Génère une règle de compilation par programme. Les sources asm pures sont
 # liées avec c64-asm.cfg + __EXEHDR__ (en-tête BASIC SYS). Dès qu'il y a du
 # C, on utilise la configuration standard c64.cfg et le runtime cc65.
+# build/<prog>.dbg : infos de débogage ld65 (adresse <-> fichier:ligne), lues
+# par dbg.py (where, lines, disasm) et par la vue Code du portail.
 define PROG_RULE
-$(BUILD)/$(1).prg $(BUILD)/$(1).lbl: $(2) | $(BUILD)
+$(BUILD)/$(1).prg $(BUILD)/$(1).lbl $(BUILD)/$(1).dbg: $(2) | $(BUILD)
 	@echo "== $(1) : $(2)"
 	$(CL65) -t $(CC65_TARGET) $(DEBUGFLAGS) $(CFLAGS) $(ASFLAGS) $(LDFLAGS) \
 	    $(if $(filter %.c,$(2)),,-C c64-asm.cfg -u __EXEHDR__) \
-	    -Ln $(BUILD)/$(1).lbl -m $(BUILD)/$(1).map \
+	    -Ln $(BUILD)/$(1).lbl -m $(BUILD)/$(1).map -Wl --dbgfile,$(BUILD)/$(1).dbg \
 	    -o $(BUILD)/$(1).prg $(2)
 	@rm -f $(patsubst %.s,%.o,$(patsubst %.c,%.o,$(2)))
 endef
