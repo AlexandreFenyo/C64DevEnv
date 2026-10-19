@@ -18,9 +18,17 @@
 #
 # Sans --cycles ni --wait, VICE tourne en arrière-plan : son PID est écrit
 # dans build/vice.pid et tools/stop.sh l'arrête. Une instance précédente
-# encore vivante est arrêtée d'abord (une seule instance à la fois).
+# encore vivante est arrêtée d'abord (une seule instance interactive).
+#
+# Exécution bornée (--cycles sans --monitor) : instance indépendante, qui ne
+# touche ni à l'instance interactive ni à build/vice.pid ; journal dans
+# build/vice-bounded-<pid>.log, supprimé en cas de succès.
 #
 # Autostart : -autostart avec -autostartprgmode 1 (injection directe en RAM).
+#
+# Le portail (tools/portal.py) expose ces options : toute option ajoutée,
+# renommée ou supprimée ici doit y être reportée (tests/test_4_portal.sh
+# vérifie la cohérence).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -38,8 +46,14 @@ PORT=6502
 WAIT=0
 PRG=""
 
-die() { echo "run.sh: $*" >&2; exit 1; }
-usage() { sed -n '2,24p' "$0"; exit "${1:-0}"; }
+die() {
+    # Échec d'un lancement interactif : ne pas laisser un "starting" orphelin.
+    [ "${INTERACTIVE:-0}" = 1 ] && rm -f "${STATEFILE:-}"
+    echo "run.sh: $*" >&2
+    exit 1
+}
+# Aide = bloc de commentaires d'en-tête (le portail en extrait les options).
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit "${1:-0}"; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -51,7 +65,7 @@ while [ $# -gt 0 ]; do
         --monitor) MONITOR=1 ;;
         --port) [ $# -ge 2 ] || die "--port attend un nombre"; PORT="$2"; shift ;;
         --wait) WAIT=1 ;;
-        -h|--help) usage 0 ;;
+        -h|--help) usage 0 ;;  # le portail lit les options dans cette aide
         --) shift; [ $# -ge 1 ] && PRG="$1"; break ;;
         -*) die "option inconnue : $1 (voir --help)" ;;
         *) [ -z "$PRG" ] || die "un seul programme à la fois"; PRG="$1" ;;
@@ -73,8 +87,16 @@ mkdir -p "$BUILD"
 NAME="$(basename "${PRG%.prg}")"
 LABELS="${PRG%.prg}.labels"
 
-# Une seule instance : on arrête la précédente proprement.
-"$ROOT/tools/stop.sh" --quiet || true
+# Exécution bornée sans moniteur : instance indépendante de l'instance
+# interactive (pas de stop.sh, pas de vice.pid, journal à part).
+BOUNDED=0
+if [ -n "$CYCLES" ] && [ "$MONITOR" = 0 ]; then
+    BOUNDED=1
+    LOGFILE="$BUILD/vice-bounded-$$.log"
+else
+    # Une seule instance interactive : on arrête la précédente proprement.
+    "$ROOT/tools/stop.sh" --quiet || true
+fi
 
 ARGS=(-default -autostartprgmode 1 -autostart "$PRG")
 # Options supplémentaires passées telles quelles à x64sc (ex. VICE_EXTRA_ARGS="-ntsc").
@@ -115,11 +137,42 @@ esac
 
 echo "run.sh: $NAME ($MODE$( [ "$MONITOR" = 1 ] && echo ", monitor :$PORT")$( [ -n "$CYCLES" ] && echo ", $CYCLES cycles"))"
 : >"$LOGFILE"
+# Instance interactive : état "starting" écrit AVANT le lancement, pour que
+# personne (dbg.py, portail) ne touche au moniteur pendant l'autostart.
+INTERACTIVE=0
+STATEFILE="$BUILD/vice.state"
+if [ "$BOUNDED" = 0 ] && [ -z "$CYCLES" ] && [ "$WAIT" = 0 ]; then
+    INTERACTIVE=1
+    echo starting >"$STATEFILE"
+fi
 # setsid : VICE (et xvfb-run) forment leur propre groupe de processus, que
 # stop.sh peut tuer d'un bloc.
 setsid "${CMD[@]}" </dev/null >>"$LOGFILE" 2>&1 &
 VICE_PID=$!
-echo "$VICE_PID" >"$PIDFILE"
+if [ "$BOUNDED" = 1 ]; then
+    # Ctrl-C sur run.sh : ne pas laisser l'instance bornée orpheline.
+    trap 'kill -TERM -- "-$VICE_PID" 2>/dev/null; exit 130' INT TERM
+else
+    echo "$VICE_PID" >"$PIDFILE"
+fi
+
+# Instance interactive : attendre la fin de l'autostart AVANT tout contact
+# avec le moniteur. Toute activité sur le port du moniteur pendant
+# l'autostart (sonde de connexion, connexion du démon, lecture des
+# registres...) peut le bloquer avant le RUN, de façon intermittente
+# (constaté avec VICE 3.7.1). build/vice.state vaut "starting" puis
+# "ready" ; dbg.py et le portail n'envoient rien à VICE avant "ready".
+if [ "$INTERACTIVE" = 1 ]; then
+    deadline=$((SECONDS + ${AUTOSTART_TIMEOUT:-30}))
+    until grep -q "AUTOSTART: Done" "$LOGFILE" 2>/dev/null; do
+        kill -0 "$VICE_PID" 2>/dev/null || { rm -f "$STATEFILE"; tail -5 "$LOGFILE" >&2; die "VICE s'est arrêté pendant l'autostart (voir $LOGFILE)"; }
+        if [ "$SECONDS" -ge "$deadline" ]; then
+            echo "run.sh: ATTENTION autostart non confirmé après ${AUTOSTART_TIMEOUT:-30} s (voir $LOGFILE)" >&2
+            break
+        fi
+        sleep 0.1
+    done
+fi
 
 if [ "$MONITOR" = 1 ]; then
     # Attend l'ouverture du port du moniteur binaire (VICE l'ouvre au démarrage).
@@ -145,17 +198,23 @@ if [ "$MONITOR" = 1 ]; then
     [ -S "$DBG_SOCK" ] || die "le démon dbg.py n'a pas démarré (voir $BUILD/dbg.log)"
 fi
 
+if [ "$INTERACTIVE" = 1 ]; then
+    echo ready >"$STATEFILE"
+    grep -q "AUTOSTART: Done" "$LOGFILE" && echo "run.sh: autostart terminé, $NAME en cours d'exécution"
+fi
+
 if [ -n "$CYCLES" ] || [ "$WAIT" = 1 ]; then
     set +e
     wait "$VICE_PID"
     rc=$?
     set -e
-    rm -f "$PIDFILE"
+    [ "$BOUNDED" = 1 ] || rm -f "$PIDFILE"
     if [ -n "$CYCLES" ]; then
         # -limitcycles fait sortir VICE avec le code 1 : c'est le cas normal.
         if grep -q "cycle limit reached" "$LOGFILE"; then
             [ -z "$SCREENSHOT" ] || [ -s "$SCREENSHOT" ] || die "capture absente : $SCREENSHOT"
             echo "run.sh: terminé après $CYCLES cycles${SCREENSHOT:+, capture $SCREENSHOT}"
+            [ "$BOUNDED" = 1 ] && rm -f "$LOGFILE"
             exit 0
         fi
         tail -5 "$LOGFILE" >&2

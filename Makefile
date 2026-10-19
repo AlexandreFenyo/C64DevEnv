@@ -9,8 +9,13 @@
 #   make run PROG=x lance build/x.prg dans VICE (fenêtre visible)
 #   make debug PROG=x   idem avec le moniteur binaire (port 6502) + labels
 #   make test       exécute tests/run_tests.sh
-#   make clean      supprime build/
+#   make clean      arrête VICE puis supprime build/
 #   make list       liste les programmes détectés
+#   make portal     démarre le portail web (http://localhost:8064)
+#   make portal-stop    arrête le portail
+#
+# Le portail (tools/portal.py) déclare les cibles qu'il utilise : toute cible
+# .PHONY ajoutée ou supprimée doit y être reportée (make test le vérifie).
 #
 # Variables utiles : RUNFLAGS="--headless --warp" pour make run/debug.
 
@@ -34,7 +39,7 @@ PROGS      := $(sort $(notdir $(PROG_DIRS)) $(basename $(notdir $(PROG_FILES))))
 PRGS       := $(addprefix $(BUILD)/,$(addsuffix .prg,$(PROGS)))
 LABELS     := $(addprefix $(BUILD)/,$(addsuffix .labels,$(PROGS)))
 
-.PHONY: all clean run debug test list install
+.PHONY: all clean run debug test list install portal portal-stop
 .DELETE_ON_ERROR:
 
 all: $(PRGS) $(LABELS)
@@ -70,6 +75,7 @@ $(BUILD)/%.labels: $(BUILD)/%.lbl $(TOOLS)/mklabels.py
 	@python3 $(TOOLS)/mklabels.py $< $@
 
 clean:
+	@$(TOOLS)/stop.sh --quiet || true   # VICE et dbg.py utilisent build/
 	rm -rf $(BUILD)
 	find $(SRC_DIRS) -name '*.o' -delete 2>/dev/null || true
 
@@ -92,3 +98,9 @@ test: all
 
 install:
 	$(TOOLS)/install.sh
+
+portal:
+	$(TOOLS)/portal.sh start
+
+portal-stop:
+	$(TOOLS)/portal.sh stop

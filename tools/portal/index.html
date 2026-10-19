@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portail C64</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2340318d'/%3E%3Crect x='5' y='7' width='22' height='18' rx='2' fill='%237869c4'/%3E%3Crect x='8' y='11' width='10' height='2' fill='%23fff'/%3E%3Crect x='8' y='15' width='14' height='2' fill='%23fff'/%3E%3Crect x='8' y='19' width='3' height='3' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/portal.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">C64</span>
+    <div>
+      <h1>Portail de développement</h1>
+      <div class="sub" id="git">&nbsp;</div>
+    </div>
+  </div>
+  <div class="chips" id="chips">
+    <span class="chip" id="chip-vice" title="Instance VICE interactive (build/vice.pid)">VICE : …</span>
+    <span class="chip" id="chip-monitor" title="Moniteur binaire (dbg.py status)">Moniteur : …</span>
+    <span class="chip" id="chip-job" title="Tâche en cours">Tâche : …</span>
+    <span class="chip" id="chip-sync" title="Cohérence entre les outils et le portail">Cohérence : …</span>
+  </div>
+</header>
+
+<div id="notice" class="notice" role="status" hidden></div>
+
+<main class="layout">
+  <section class="card" id="card-programs">
+    <div class="card-head">
+      <h2>Programmes</h2>
+      <button class="btn" data-action="build" title="make">Compiler</button>
+    </div>
+    <div class="options">
+      <label>Mode
+        <select id="opt-mode">
+          <option value="show">Visible (WSLg)</option>
+          <option value="headless">Invisible (headless)</option>
+        </select>
+      </label>
+      <label class="check"><input type="checkbox" id="opt-monitor" checked> Moniteur</label>
+      <label class="check"><input type="checkbox" id="opt-warp"> Warp</label>
+      <label>Cycles capture
+        <input type="number" id="opt-cycles" min="100000" step="1000000" value="5000000">
+      </label>
+    </div>
+    <div class="table-wrap">
+      <table class="programs">
+        <thead><tr><th>Programme</th><th>Build</th><th class="actions-col">Actions</th></tr></thead>
+        <tbody id="programs"><tr><td colspan="3" class="muted">Chargement…</td></tr></tbody>
+      </table>
+    </div>
+    <div id="sources" class="sources" hidden>
+      <div class="sources-head">
+        <strong id="sources-title"></strong>
+        <div class="tabs" id="sources-tabs"></div>
+        <button class="btn ghost small" id="sources-close">Fermer</button>
+      </div>
+      <pre id="sources-body" class="code"></pre>
+    </div>
+  </section>
+
+  <section class="card" id="card-ops">
+    <div class="card-head"><h2>Opérations</h2></div>
+    <div class="button-row">
+      <button class="btn" data-action="test">Tous les tests</button>
+      <select id="test-select" aria-label="Test unique"></select>
+      <button class="btn ghost" data-action="test-one">Lancer ce test</button>
+    </div>
+    <div class="button-row">
+      <button class="btn warn" data-action="stop">Arrêter VICE</button>
+      <button class="btn ghost" data-action="stop-all" title="stop.sh --all">Tout arrêter (orphelins)</button>
+      <button class="btn ghost" data-action="clean" title="make clean">Nettoyer</button>
+      <button class="btn ghost" data-action="install-check" title="install.sh --no-apt">Vérifier l'installation</button>
+    </div>
+    <p class="hint">Les tests et « Nettoyer » arrêtent l'instance VICE en cours. Une capture n'y touche pas.</p>
+    <div class="job">
+      <div class="job-head">
+        <strong id="job-title">Aucune tâche</strong>
+        <span class="badge" id="job-state"></span>
+      </div>
+      <pre id="job-output" class="console"></pre>
+      <div id="job-files" class="job-files"></div>
+    </div>
+  </section>
+
+  <section class="card span-2" id="card-monitor">
+    <div class="card-head">
+      <h2>Moniteur</h2>
+      <span class="muted" id="monitor-hint">Lancez un programme avec la case « Moniteur ».</span>
+    </div>
+    <div class="monitor">
+      <div class="screen-pane">
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-screen="image" role="tab">Image</button>
+          <button class="tab" data-screen="text" role="tab">Texte</button>
+        </div>
+        <div class="screen-box">
+          <img id="live" alt="Écran du C64" width="384" height="272">
+          <div id="live-empty" class="screen-empty">Pas d'image : moniteur indisponible</div>
+          <pre id="screen-text" class="c64text" hidden></pre>
+        </div>
+        <div class="button-row">
+          <button class="btn small" id="screen-refresh">Rafraîchir</button>
+          <label class="check"><input type="checkbox" id="screen-auto" checked> Auto (1 s)</label>
+          <label class="check"><input type="checkbox" id="screen-lower"> Minuscules</label>
+          <a class="btn ghost small" id="screen-save" href="#" download="c64-ecran.png">Enregistrer</a>
+        </div>
+      </div>
+
+      <div class="ctl-pane">
+        <div class="regs" id="regs">—</div>
+        <div class="button-row">
+          <button class="btn small" data-dbg="pause">Pause</button>
+          <button class="btn small" data-dbg="step">Pas</button>
+          <button class="btn small" data-dbg="next" title="Passe par-dessus les JSR">Pas (sans JSR)</button>
+          <button class="btn small" data-dbg="cont">Continuer</button>
+          <button class="btn small ghost" data-dbg="wait">Attendre l'arrêt</button>
+          <button class="btn small ghost" data-dbg="reset">Reset</button>
+          <button class="btn small warn" data-dbg="quit">Quitter VICE</button>
+        </div>
+
+        <h3>Points d'arrêt</h3>
+        <form class="inline-form" id="bp-form">
+          <input id="bp-addr" placeholder="adresse ou label (loop, $0831…)" autocomplete="off">
+          <button class="btn small" data-kind="break">Exécution</button>
+          <button class="btn small ghost" data-kind="watch">Lecture/écriture</button>
+        </form>
+        <ul class="bp-list" id="bp-list"><li class="muted">—</li></ul>
+
+        <h3>Mémoire</h3>
+        <form class="inline-form" id="mem-form">
+          <input id="mem-addr" placeholder="adresse ($0400, 1024, label)" autocomplete="off">
+          <input id="mem-len" type="number" min="1" max="65536" value="64" class="narrow" aria-label="Longueur">
+          <button class="btn small">Lire</button>
+        </form>
+        <form class="inline-form" id="poke-form">
+          <input id="poke-addr" placeholder="adresse" autocomplete="off">
+          <input id="poke-vals" placeholder="valeurs ($41 66 0x42…)" autocomplete="off">
+          <button class="btn small ghost">Écrire</button>
+        </form>
+        <pre id="mem-output" class="console small"></pre>
+
+        <h3>Labels</h3>
+        <form class="inline-form" id="label-form">
+          <input id="label-q" placeholder="rechercher (loop, VIC_, $0831…)" autocomplete="off">
+          <button class="btn small ghost">Chercher</button>
+        </form>
+        <div class="labels" id="label-results"></div>
+      </div>
+    </div>
+
+    <details class="console-box" open>
+      <summary>Console dbg.py</summary>
+      <form class="inline-form" id="dbg-form">
+        <select id="dbg-cmd" aria-label="Commande"></select>
+        <input id="dbg-args" placeholder="arguments" autocomplete="off">
+        <button class="btn small">Exécuter</button>
+      </form>
+      <div class="muted small" id="dbg-help"></div>
+      <pre id="dbg-output" class="console"></pre>
+    </details>
+  </section>
+
+  <section class="card" id="card-logs">
+    <div class="card-head">
+      <h2>Journaux</h2>
+      <select id="log-select" aria-label="Journal"></select>
+      <button class="btn small ghost" id="log-refresh">Rafraîchir</button>
+    </div>
+    <pre id="log-output" class="console tall"></pre>
+  </section>
+
+  <section class="card" id="card-sync">
+    <div class="card-head">
+      <h2>Cohérence outils ↔ portail</h2>
+      <button class="btn small ghost" id="sync-refresh">Revérifier</button>
+    </div>
+    <div id="sync-summary"></div>
+    <div id="sync-details" class="sync-details"></div>
+  </section>
+</main>
+
+<script src="/static/portal.js"></script>
+</body>
+</html>

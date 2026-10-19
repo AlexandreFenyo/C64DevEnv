@@ -25,6 +25,12 @@ echo "ok : dbg.py sans VICE -> '$out'"
 
 tools/run.sh --headless --warp --monitor build/hello.prg || fail "run.sh --monitor"
 
+# run.sh ne rend la main qu'une fois l'autostart terminé (sinon une commande
+# du moniteur peut le bloquer) : état "ready" et "AUTOSTART: Done" au journal.
+[ "$(cat build/vice.state 2>/dev/null)" = "ready" ] || fail "build/vice.state != ready au retour de run.sh"
+grep -q "AUTOSTART: Done" build/vice.log || fail "autostart non terminé au retour de run.sh"
+echo "ok : autostart terminé avant de rendre la main"
+
 # Attend que l'autostart ait lancé le programme : la valeur témoin apparaît.
 witness=""
 for _ in $(seq 1 100); do

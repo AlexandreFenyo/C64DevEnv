@@ -52,7 +52,7 @@ if [ -f "$DBGPID" ]; then
     fi
     rm -f "$DBGPID"
 fi
-rm -f "${C64_DBG_SOCK:-$ROOT/build/dbg.sock}"
+rm -f "${C64_DBG_SOCK:-$ROOT/build/dbg.sock}" "$ROOT/build/vice.state"
 
 if [ -f "$PIDFILE" ]; then
     PID="$(cat "$PIDFILE")"

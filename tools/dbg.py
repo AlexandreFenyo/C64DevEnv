@@ -16,15 +16,22 @@ Commandes :
   list                    liste les points d'arrêt
   step [N]                exécute N instructions (défaut 1), reste arrêté
   next                    comme step mais passe par-dessus les JSR
+  pause                   arrête l'émulateur là où il est (sans exécuter d'instruction)
   cont                    reprend l'exécution
   wait [SECONDES]         attend l'arrêt sur un point d'arrêt (défaut 10 s)
   status                  running|stopped + PC, sans toucher à l'émulateur
-  reset                   reset logiciel du C64 ("reset hard" : matériel)
+  reset [hard]            reset logiciel du C64 ("reset hard" : matériel)
   dump ADDR LEN FICHIER   sauve LEN octets dans un fichier binaire
   screen [--lower]        mémoire écran ($0400-$07E7) rendue en texte
+  capture F.png [--full]  image de l'écran en direct (PNG 384x272 ; --full : 504x312)
   label TEXTE|ADDR        recherche un symbole (sous-chaîne) ou une adresse
   info                    version de VICE
+  ping                    teste la connexion au moniteur
   quit                    arrête VICE
+
+(Format de cette liste : "  commande ARGS  description", au moins deux
+espaces avant la description : le portail tools/portal.py la lit pour
+construire sa console. Toute commande ajoutée à COMMANDS doit y figurer.)
 
 Adresses : décimal (1024), $hexa ($0400), 0xhexa (0x400), nom de label
 (start, .start), ou label+/-décalage (start+3). Les labels viennent de
@@ -42,6 +49,7 @@ Codes de sortie : 0 ok, 1 erreur de commande, 2 VICE injoignable,
 3 délai dépassé.
 """
 import argparse
+import collections
 import os
 import selectors
 import socket
@@ -49,6 +57,7 @@ import struct
 import subprocess
 import sys
 import time
+import zlib
 
 STX = 0x02
 API_VERSION = 0x02
@@ -70,7 +79,9 @@ CMD_ADVANCE = 0x71
 CMD_KEYBOARD_FEED = 0x72
 CMD_PING = 0x81
 CMD_REGISTERS_AVAILABLE = 0x83
+CMD_DISPLAY_GET = 0x84
 CMD_VICE_INFO = 0x85
+CMD_PALETTE_GET = 0x91
 CMD_EXIT = 0xAA
 CMD_QUIT = 0xBB
 CMD_RESET = 0xCC
@@ -261,6 +272,7 @@ class Daemon:
         self.vice_reader = FrameReader()
         self.client_reader = FrameReader(request=True)
         self.client = None
+        self.pending = collections.deque()
 
     def run(self):
         try:
@@ -292,9 +304,9 @@ class Daemon:
                     elif key.data == "srv":
                         conn, _ = srv.accept()
                         if self.client is not None:
-                            # Un seul client à la fois : les suivants attendent
-                            # dans la file d'écoute, on ne les accepte pas encore.
-                            self.pending = conn
+                            # Un seul client à la fois : les suivants sont
+                            # servis dans l'ordre d'arrivée.
+                            self.pending.append(conn)
                             continue
                         self.attach(sel, conn)
                     elif key.data == "client":
@@ -318,8 +330,6 @@ class Daemon:
             except OSError:
                 pass
 
-    pending = None
-
     def attach(self, sel, conn):
         conn.setblocking(False)
         self.client = conn
@@ -333,9 +343,8 @@ class Daemon:
         except OSError:
             pass
         self.client = None
-        if self.pending is not None:
-            conn, self.pending = self.pending, None
-            self.attach(sel, conn)
+        if self.pending:
+            self.attach(sel, self.pending.popleft())
 
     def on_vice_frame(self, frame):
         trace("daemon <- vice type=%02x err=%02x req=%08x len=%d", frame.type,
@@ -573,6 +582,36 @@ class Monitor:
         rev = struct.unpack("<I", resp.body[2 + n:2 + n + m])[0] if m == 4 else 0
         return ver, rev
 
+    def display(self):
+        """Tampon d'affichage du VIC-II : (largeur, hauteur, x0, y0, w, h, pixels)
+        en 8 bits indexés ; (x0, y0, w, h) = zone utile 320x200."""
+        body = self.call(CMD_DISPLAY_GET, bytes([1, 0])).body  # VIC-II, 8 bits indexés
+        (flen,) = struct.unpack("<I", body[:4])
+        dw, dh, xo, yo, iw, ih, bpp = struct.unpack("<HHHHHHB", body[4:17])
+        if bpp != 8:
+            raise DbgError("format d'affichage inattendu (%d bits par pixel)" % bpp)
+        (blen,) = struct.unpack("<I", body[4 + flen:8 + flen])
+        pixels = body[8 + flen:8 + flen + blen]
+        # VICE 3.7.1 annonce dw*dh octets mais en envoie 4 de moins (longueur
+        # de trame calculée sans le champ de 4 octets) : il manque les derniers
+        # pixels du coin inférieur droit, hors zone recadrée. On complète.
+        missing = dw * dh - len(pixels)
+        if 0 < missing <= 4 and pixels:
+            pixels += pixels[-1:] * missing
+        if len(pixels) != dw * dh:
+            raise DbgError("tampon d'affichage tronqué (%d/%d octets)" % (len(pixels), dw * dh))
+        return dw, dh, xo, yo, iw, ih, pixels
+
+    def palette(self):
+        body = self.call(CMD_PALETTE_GET, bytes([1])).body
+        (count,) = struct.unpack("<H", body[:2])
+        pos, colors = 2, []
+        for _ in range(count):
+            size = body[pos]
+            colors.append(tuple(body[pos + 1:pos + 4]))
+            pos += 1 + size
+        return colors
+
     def wait_stopped(self, seconds):
         """Attend un événement d'arrêt ; renvoie le PC ou None."""
         deadline = time.monotonic() + seconds
@@ -642,6 +681,27 @@ def screen_code_to_char(code, lower=False):
     if lower and 65 <= code <= 90:
         return chr(ord("A") + code - 65)
     return "."  # caractère graphique
+
+
+def write_png_indexed(path, width, height, rows, palette):
+    """PNG 8 bits à palette (type 3), bibliothèque standard uniquement."""
+    def chunk(tag, data):
+        return (struct.pack(">I", len(data)) + tag + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+    raw = b"".join(b"\x00" + row for row in rows)  # filtre 0 sur chaque ligne
+    plte = b"".join(bytes(c) for c in palette)
+    png = (b"\x89PNG\r\n\x1a\n"
+           + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 3, 0, 0, 0))
+           + chunk(b"PLTE", plte)
+           + chunk(b"IDAT", zlib.compress(raw, 9))
+           + chunk(b"IEND", b""))
+    with open(path, "wb") as f:
+        f.write(png)
+
+
+# Recadrage identique à -exitscreenshot : 32 px de bordure à gauche/droite,
+# 36 en haut/bas autour de la zone utile 320x200.
+CAPTURE_BORDER_X, CAPTURE_BORDER_Y = 32, 36
 
 
 def fmt_screen(data, lower=False):
@@ -724,6 +784,16 @@ def cmd_next(mon, labels, args):
     cmd_step(mon, labels, args, step_over=True)
 
 
+def cmd_pause(mon, labels, args):
+    st = mon.status()
+    if not st["stopped"]:
+        mon.ping()  # toute commande fait entrer VICE dans le moniteur
+    mon.was_stopped = True  # et on y reste
+    pc = mon.registers().get("PC", 0)
+    name = labels.name_of(pc)
+    print("stopped PC=%04x%s" % (pc, " (%s)" % name if name else ""))
+
+
 def cmd_cont(mon, labels, args):
     mon.exit_monitor()
     mon.was_stopped = False
@@ -782,6 +852,26 @@ def cmd_screen(mon, labels, args):
     print(fmt_screen(mon.mem_get(base, base + SCREEN_SIZE - 1), lower))
 
 
+def cmd_capture(mon, labels, args):
+    need(args, 1, "capture FICHIER.png [--full]")
+    full = "--full" in args
+    path = next(a for a in args if not a.startswith("--"))
+    dw, dh, xo, yo, iw, ih, pixels = mon.display()
+    palette = mon.palette()
+    if full:
+        x0, y0, w, h = 0, 0, dw, dh
+    else:
+        x0 = max(0, xo - CAPTURE_BORDER_X)
+        y0 = max(0, yo - CAPTURE_BORDER_Y)
+        w = min(dw - x0, iw + 2 * CAPTURE_BORDER_X)
+        h = min(dh - y0, ih + 2 * CAPTURE_BORDER_Y)
+    rows = [pixels[(y0 + y) * dw + x0:(y0 + y) * dw + x0 + w] for y in range(h)]
+    if max(pixels) >= len(palette):
+        raise DbgError("indice de couleur hors palette (%d >= %d)" % (max(pixels), len(palette)))
+    write_png_indexed(path, w, h, rows, palette)
+    print("capture %dx%d -> %s" % (w, h, path))
+
+
 def cmd_label(mon, labels, args):
     need(args, 1, "label TEXTE|ADDR")
     if not labels.by_name:
@@ -821,11 +911,34 @@ def cmd_ping(mon, labels, args):
 COMMANDS = {
     "regs": cmd_regs, "mem": cmd_mem, "poke": cmd_poke, "break": cmd_break,
     "watch": cmd_watch, "delete": cmd_delete, "list": cmd_list, "step": cmd_step,
-    "next": cmd_next, "cont": cmd_cont, "wait": cmd_wait, "status": cmd_status,
-    "reset": cmd_reset, "dump": cmd_dump, "screen": cmd_screen, "label": cmd_label,
+    "next": cmd_next, "pause": cmd_pause, "cont": cmd_cont, "wait": cmd_wait,
+    "status": cmd_status,
+    "reset": cmd_reset, "dump": cmd_dump, "screen": cmd_screen, "capture": cmd_capture,
+    "label": cmd_label,
     "info": cmd_info, "quit": cmd_quit, "ping": cmd_ping,
 }
 OFFLINE = {"label"}            # sans VICE
+NO_WAIT = {"status", "ping"}   # répondues sans envoyer de commande à VICE
+AUTOSTART_WAIT = 30            # secondes
+
+
+def autostart_running():
+    """Vrai si run.sh signale un autostart en cours (build/vice.state)."""
+    try:
+        with open(os.path.join(BUILD, "vice.state")) as f:
+            return f.read().strip() == "starting"
+    except OSError:
+        return False  # pas de fichier : instance lancée autrement
+
+
+def wait_autostart():
+    """run.sh écrit build/vice.state = starting pendant l'autostart : toute
+    activité du moniteur à ce moment peut bloquer l'autostart. On attend."""
+    deadline = time.monotonic() + AUTOSTART_WAIT
+    while autostart_running():
+        if time.monotonic() >= deadline:
+            raise Timeout("autostart toujours en cours après %d s (build/vice.state)" % AUTOSTART_WAIT)
+        time.sleep(0.1)
 KEEP_STATE = {"cont", "quit"}  # ne pas relancer l'émulateur après coup
 
 
@@ -843,7 +956,9 @@ def main(argv=None):
     ap.add_argument("--sock", default=None, help="socket Unix du démon")
     ap.add_argument("--daemon", action="store_true", help="mode démon (usage interne)")
     ap.add_argument("command", nargs="?", choices=sorted(COMMANDS))
-    ap.add_argument("args", nargs="*")
+    # REMAINDER : les options après la commande (screen --lower, capture
+    # --full) lui appartiennent, pas à dbg.py.
+    ap.add_argument("args", nargs=argparse.REMAINDER)
     opts = ap.parse_args(argv)
 
     if opts.daemon:
@@ -860,6 +975,12 @@ def main(argv=None):
         if opts.command in OFFLINE:
             handler(None, labels, opts.args)
             return 0
+        if opts.command == "status" and autostart_running():
+            # Pas même de connexion (ni démarrage du démon) pendant l'autostart.
+            print("starting")
+            return 0
+        if opts.command not in NO_WAIT:
+            wait_autostart()
         mon = Monitor(opts.port, opts.timeout, opts.sock)
         try:
             handler(mon, labels, opts.args)
