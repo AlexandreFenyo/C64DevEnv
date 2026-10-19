@@ -2,7 +2,7 @@
 # run.sh - lance un .prg dans VICE x64sc, visible (WSLg) ou headless (xvfb).
 #
 # Usage : run.sh [--show|--headless] [--warp] [--cycles N] [--screenshot f.png]
-#                [--monitor] [--port P] [--wait] [--] prog.prg
+#                [--monitor] [--load-only] [--port P] [--wait] [--] prog.prg
 #
 #   --show        fenêtre VICE visible via WSLg (défaut)
 #   --headless    sous xvfb-run, son désactivé, invisible
@@ -13,6 +13,9 @@
 #   --monitor     -binarymonitor (port 6502) + -remotemonitor (port 6510),
 #                 charge build/<prog>.labels via -moncommands, et attend
 #                 que le port du moniteur binaire réponde avant de rendre la main
+#   --load-only   charge le programme en RAM sans le lancer (-autoload au
+#                 lieu de -autostart) : READY., il reste à taper RUN ; sert
+#                 à poser des points d'arrêt avant le lancement (tools/dap.py)
 #   --port P      port du moniteur binaire (défaut 6502 ; texte = P+8)
 #   --wait        attendre la fin de VICE même sans --cycles
 #
@@ -24,7 +27,8 @@
 # touche ni à l'instance interactive ni à build/vice.pid ; journal dans
 # build/vice-bounded-<pid>.log, supprimé en cas de succès.
 #
-# Autostart : -autostart avec -autostartprgmode 1 (injection directe en RAM).
+# Autostart : -autostart avec -autostartprgmode 1 (injection directe en RAM) ;
+# -autoload avec --load-only (même injection, sans RUN).
 #
 # Le portail (tools/portal.py) expose ces options : toute option ajoutée,
 # renommée ou supprimée ici doit y être reportée (tests/test_4_portal.sh
@@ -44,6 +48,7 @@ SCREENSHOT=""
 MONITOR=0
 PORT=6502
 WAIT=0
+LOAD_ONLY=0
 PRG=""
 
 die() {
@@ -63,6 +68,7 @@ while [ $# -gt 0 ]; do
         --cycles) [ $# -ge 2 ] || die "--cycles attend un nombre"; CYCLES="$2"; shift ;;
         --screenshot) [ $# -ge 2 ] || die "--screenshot attend un fichier"; SCREENSHOT="$2"; shift ;;
         --monitor) MONITOR=1 ;;
+        --load-only) LOAD_ONLY=1 ;;
         --port) [ $# -ge 2 ] || die "--port attend un nombre"; PORT="$2"; shift ;;
         --wait) WAIT=1 ;;
         -h|--help) usage 0 ;;  # le portail lit les options dans cette aide
@@ -98,7 +104,11 @@ else
     "$ROOT/tools/stop.sh" --quiet || true
 fi
 
-ARGS=(-default -autostartprgmode 1 -autostart "$PRG")
+if [ "$LOAD_ONLY" = 1 ]; then
+    ARGS=(-default -autostartprgmode 1 -autoload "$PRG")
+else
+    ARGS=(-default -autostartprgmode 1 -autostart "$PRG")
+fi
 # Options supplémentaires passées telles quelles à x64sc (ex. VICE_EXTRA_ARGS="-ntsc").
 # shellcheck disable=SC2206
 [ -n "${VICE_EXTRA_ARGS:-}" ] && ARGS+=($VICE_EXTRA_ARGS)
@@ -206,7 +216,13 @@ fi
 
 if [ "$INTERACTIVE" = 1 ]; then
     echo ready >"$STATEFILE"
-    grep -q "AUTOSTART: Done" "$LOGFILE" && echo "run.sh: autostart terminé, $NAME en cours d'exécution"
+    if ! grep -q "AUTOSTART: Done" "$LOGFILE"; then
+        :
+    elif [ "$LOAD_ONLY" = 1 ]; then
+        echo "run.sh: $NAME chargé en mémoire, non lancé (taper RUN)"
+    else
+        echo "run.sh: autostart terminé, $NAME en cours d'exécution"
+    fi
 fi
 
 if [ -n "$CYCLES" ] || [ "$WAIT" = 1 ]; then

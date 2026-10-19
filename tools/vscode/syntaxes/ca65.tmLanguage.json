@@ -1,0 +1,28 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "ca65",
+  "scopeName": "source.ca65",
+  "patterns": [
+    { "name": "comment.line.semicolon.ca65", "match": ";.*$" },
+    { "name": "string.quoted.double.ca65", "begin": "\"", "end": "\"" },
+    { "name": "string.quoted.single.ca65", "match": "'(?:[^'\\\\]|\\\\.)'" },
+    {
+      "match": "^\\s*(@?[A-Za-z_][A-Za-z0-9_]*)\\s*(:)",
+      "captures": { "1": { "name": "entity.name.function.label.ca65" }, "2": { "name": "punctuation.separator.ca65" } }
+    },
+    {
+      "match": "^\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(:?=)",
+      "captures": { "1": { "name": "variable.other.constant.ca65" }, "2": { "name": "keyword.operator.assignment.ca65" } }
+    },
+    { "name": "keyword.control.directive.ca65", "match": "(?<![\\w.])\\.[A-Za-z_][A-Za-z0-9_]*\\b" },
+    {
+      "name": "keyword.other.opcode.ca65",
+      "match": "(?i)\\b(adc|and|asl|bcc|bcs|beq|bit|bmi|bne|bpl|brk|bvc|bvs|clc|cld|cli|clv|cmp|cpx|cpy|dec|dex|dey|eor|inc|inx|iny|jmp|jsr|lda|ldx|ldy|lsr|nop|ora|pha|php|pla|plp|rol|ror|rti|rts|sbc|sec|sed|sei|sta|stx|sty|tax|tay|tsx|txa|txs|tya)\\b"
+    },
+    { "name": "constant.numeric.hex.ca65", "match": "\\$[0-9A-Fa-f]+\\b" },
+    { "name": "constant.numeric.binary.ca65", "match": "%[01]+\\b" },
+    { "name": "constant.numeric.decimal.ca65", "match": "\\b[0-9]+\\b" },
+    { "name": "keyword.operator.immediate.ca65", "match": "#" },
+    { "name": "variable.language.register.ca65", "match": "(?i)(?<=,)\\s*[xy]\\b" }
+  ]
+}

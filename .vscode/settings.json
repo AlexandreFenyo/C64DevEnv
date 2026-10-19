@@ -1,0 +1,8 @@
+{
+  // Sources ca65 : langage de l'extension c64devenv.c64-vice (coloration,
+  // points d'arrêt), y compris si une autre extension réclame les .s.
+  "files.associations": {
+    "*.s": "ca65",
+    "*.inc": "ca65"
+  }
+}

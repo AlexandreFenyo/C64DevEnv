@@ -60,6 +60,7 @@ SCRIPT_FLAGS = {
         "excluded": {
             "--port": "port du moniteur fixé à 6502 (valeur par défaut de dbg.py)",
             "--wait": "bloquerait le portail jusqu'à la fermeture de VICE",
+            "--load-only": "réservée à l'adaptateur VS Code (tools/dap.py) : points d'arrêt posés avant le RUN",
         },
     },
     "tools/stop.sh": {
@@ -96,6 +97,7 @@ MAKE_TARGETS = {
         "install": "peut demander sudo : le portail lance install.sh --no-apt",
         "portal": "démarre le portail lui-même",
         "portal-stop": "arrête le portail lui-même",
+        "vscode": "installe l'extension VS Code : une fois, depuis un terminal (make vscode)",
     },
 }
 

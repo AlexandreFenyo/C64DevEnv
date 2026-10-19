@@ -1,0 +1,21 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "make",
+      "type": "shell",
+      "command": "make",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": {
+        "owner": "cc65",
+        "fileLocation": ["relative", "${workspaceFolder}"],
+        "pattern": {
+          "regexp": "^(.*?):(\\d+): (Error|Warning): (.*)$",
+          "file": 1, "line": 2, "severity": 3, "message": 4
+        }
+      }
+    },
+    { "label": "make test", "type": "shell", "command": "make test", "group": "test", "problemMatcher": [] },
+    { "label": "make clean", "type": "shell", "command": "make clean", "problemMatcher": [] }
+  ]
+}

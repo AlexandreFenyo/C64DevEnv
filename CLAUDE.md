@@ -20,6 +20,8 @@ Le **portail de développement** (« portail », « site web » : `tools/portal.
 - commande de `dbg.py` → l'ajouter à `COMMANDS` **et** à la liste « Commandes » de sa docstring (format `  nom ARGS  description`, 2 espaces avant la description) : la console du portail se construit dessus ; si un bouton dédié l'utilise → `DBG_USED` ; si elle écrit un fichier → `DBG_FILE_ARG` ;
 - nouvelle API ou action → test dans `tests/portal_test.py`.
 
+Même principe pour **VS Code** : un attribut de `launch`/`attach` lu par `tools/dap.py` (`args.get("xxx")` dans `req_launch`/`req_attach`) doit être déclaré dans `configurationAttributes` de `tools/vscode/package.json` (complétion de launch.json) ; le test 5 compare les deux. Modifier `dap.py` ne demande pas de réinstaller l'extension ; modifier `tools/vscode/` demande `make vscode` puis « Developer: Reload Window ».
+
 Vérification : `tools/portal.sh check` (ou `python3 tools/portal.py --check`), et `make test` (test 4) échoue en cas d'écart. Après modification de `portal.py`, `tools/portal.sh restart` (le JS/CSS/HTML est servi à chaud, il suffit de recharger la page).
 
 ## Commandes
@@ -34,9 +36,10 @@ make test                        # tests/run_tests.sh (build, screenshot headles
 make clean                       # arrête VICE puis supprime build/
 tools/stop.sh [--all]            # arrête VICE (et le démon dbg.py) ; --all tue aussi les orphelins
 make portal / make portal-stop   # portail web ; tools/portal.sh start|stop|restart|status|logs|install|uninstall|check
+make vscode                      # construit et installe l'extension VS Code (tools/vscode/ -> serveur VS Code de WSL)
 ```
 
-Exemples : `hello` (boucle infinie `loop: jmp loop`, utilisé par les tests de point d'arrêt ; le clavier ne répond pas, normal), `hello_rts` (même affichage puis `rts` : retour au `READY.`, l'utilisateur peut taper ; à préférer pour `make run`), `hello_c` (cc65, printf).
+Exemples : `hello` (boucle infinie `loop: jmp loop`, utilisé par les tests de point d'arrêt ; le clavier ne répond pas, normal), `hello_rts` (même affichage puis `rts` : retour au `READY.`, l'utilisateur peut taper ; à préférer pour `make run`), `hello_c` (cc65, printf, boucle infinie), `squares_c` (C pour le pas à pas : fonction, paramètre, locales, globale ; affiche `TOTAL=55` puis rend la main au BASIC).
 
 Un programme = un sous-répertoire de `src/` ou `examples/` (fichiers `.s` ca65 et/ou `.c`), ou un fichier isolé `src/foo.s` / `src/foo.c`. Nom du programme = nom du répertoire/fichier. Asm pur : lié avec `c64-asm.cfg -u __EXEHDR__` (en-tête BASIC `SYS 2061`, code en `$080D`, mettre le point d'entrée en premier dans `.segment "CODE"`). Dès qu'il y a un `.c` : `c64.cfg` + runtime cc65. Compilation avec `-g` pour que les labels locaux apparaissent dans `build/<prog>.labels` (format VICE `al C:080d .start`, généré par `tools/mklabels.py` depuis `ld65 -Ln`).
 
@@ -45,8 +48,10 @@ Piège cc65 : les chaînes sont converties ASCII→PETSCII ; écrire le texte **
 ### run.sh
 
 ```
-tools/run.sh [--show|--headless] [--warp] [--cycles N] [--screenshot f.png] [--monitor] [--port P] [--wait] prog.prg
+tools/run.sh [--show|--headless] [--warp] [--cycles N] [--screenshot f.png] [--monitor] [--load-only] [--port P] [--wait] prog.prg
 ```
+
+- `--load-only` : `-autoload` au lieu de `-autostart` (même injection en RAM, « AUTOSTART: Done » aussi, mais pas de `RUN`) : le C64 est au `READY.`, le programme en mémoire ; sert à poser les points d'arrêt avant de taper `RUN` (`dap.py`).
 
 - `--cycles N` + `--screenshot` : `-limitcycles`/`-exitscreenshot`, VICE s'arrête seul, run.sh attend. Boot + autostart ≈ 3,5 M cycles : utiliser **≥ 5 000 000** pour voir le programme à l'écran.
 - `--monitor` : `-binarymonitor` (6502) + `-remotemonitor` (6510) + `-moncommands build/<prog>.labels` ; copie les labels dans `build/vice.labels` ; lance le démon `dbg.py --daemon` et attend que tout réponde.
@@ -89,6 +94,17 @@ screen [--lower] | capture F.png [--full] | label TEXTE|ADDR | info | ping | qui
 - L'état est partagé par fichiers (`build/vice.pid`, `vice.state`, `dbg.sock`) : ce que je lance en ligne de commande apparaît dans le portail et inversement. Le démon dbg.py sert les clients à tour de rôle (file d'attente).
 - API JSON sous `/api/*` (POST exigent `Content-Type: application/json` ; Host/Origin non locaux refusés). Utile pour moi aussi : `curl -s localhost:8064/api/status`.
 
+### VS Code (tools/dap.py + tools/vscode/)
+
+- `tools/dap.py` : adaptateur Debug Adapter Protocol (stdin/stdout), bibliothèque standard, importe `dbg.py` (Monitor, DebugInfo, Labels, désassembleur). Il passe par le **démon** dbg.py comme tout le monde : VS Code, le portail et `dbg.py` en ligne de commande voient la même instance et les mêmes arrêts (un arrêt provoqué ailleurs apparaît dans VS Code en « pause », une reprise ailleurs en « continued »). Journal : `build/dap.log`.
+- `tools/vscode/` : extension minimale (`c64devenv.c64-vice`, `extensionKind: workspace`) : type de débogage `c64` qui lance `python3 <dossier ouvert>/tools/dap.py`, langage `ca65` (coloration, points d'arrêt autorisés dans les `.s`), complétion de launch.json. `tools/vscode-install.sh` (= `make vscode`) fabrique le `.vsix` (zip construit en Python, pas de npm) et l'installe avec `~/.vscode-server/bin/*/bin/code-server --install-extension` (le `code` de WSL hors terminal VS Code est celui de Windows : il installerait côté Windows). `.vscode/launch.json`, `tasks.json` (make + problemMatcher cc65/ca65), `settings.json` (`*.s` → ca65, la kickass-c64 de l'utilisateur réclame aussi les `.s`) sont versionnés.
+- `launch` : `make` (attribut `build`), `run.sh --show|--headless --monitor --load-only`, réponse + `initialized`, VS Code envoie les points d'arrêt, puis `configurationDone` tape `RUN` ; `stopOnEntry` = point d'arrêt sur `_main` (C) ou début de STARTUP/CODE (asm). Fin de session : `stop.sh` (VICE fermé). `attach` : labels/infos de `build/vice.*`, fin de session = nos points d'arrêt retirés + VICE relancé.
+- Pas à pas = générateurs Python : `yield` = VICE relancé, la boucle de surveillance (état du démon toutes les 0,15 s, sans toucher à VICE) reprend le générateur à l'arrêt ; un arrêt proche (retour de JSR) est attendu sur place (`QUICK_WAIT`). Instruction : `advance 1` ; si le PC obtenu n'est pas un successeur possible, une IRQ/NMI a été prise : on retrouve l'adresse de retour dans la pile et on y court (on ne s'arrête jamais dans l'IRQ). JSR franchi = point d'arrêt après le JSR + vérification de SP (récursion). Ligne = instructions jusqu'à une autre ligne ; JSR vers du code sans source (ROM, runtime cc65) franchis ; `jmp incsp2` & co. (épilogues cc65) : course jusqu'au retour ; au-delà de 500 instructions sur la même ligne (boucle) : points d'arrêt sur toutes les autres lignes + adresse de retour. stepOut : adresse de retour de la pile d'appels.
+- Pile d'appels : heuristique sur la pile 6502 (mots dont l'adresse+1-3 est un `JSR`), jusqu'au premier appelant en ROM (BASIC). Fonctions C : portées `scope` du `.dbg` ; asm : label de code le plus proche.
+- Variables C : cc65 2.19 n'écrit **pas** les types dans le `.dbg` (tous `type=0`) ni les globales dans `csym` : types déduits de la déclaration dans le `.c` (regex), tailles par écart entre décalages/labels ; globales = symboles `_xxx` des segments DATA/BSS des modules du programme. Locales : `csym sc=auto offs=N`, adresse = `sp` (zp `$02`) + taille des locales + offs, valable aux débuts de ligne (pas au milieu d'une expression qui empile) et après le prologue (`jsr pushax` / `jsr decspN`), signalé sinon.
+- Console de débogage : toute commande `dbg.py` (exécutée dans le processus, sortie capturée) ; sinon expression : variable C, label, équivalence (`= $d020 ; [$d020] = $fe`), `$adresse`, registre, avec `,b` `,w` `,l` `,s` `,N`. Points d'arrêt : lignes (déplacés sur la 1re ligne de code suivante, une par plage si la ligne C est en plusieurs morceaux), fonctions/labels, instructions (vue Désassemblage), données (lecture/écriture : checkpoints load/store). `readMemory`/`writeMemory`, `gotoTargets` (Set Next Statement), `setVariable` (registres, drapeaux, mémoire).
+- Vérification : `tests/dap_test.py` (test 5) joue VS Code. Vérification dans un **vrai** VS Code (faite une fois, à refaire si l'extension change) : télécharger `https://update.code.visualstudio.com/latest/linux-x64/stable` dans le scratchpad, puis `xvfb-run -a env -u WAYLAND_DISPLAY VSCode-linux-x64/code --no-sandbox --disable-gpu --user-data-dir X --extensions-dir Y --extensionDevelopmentPath=tools/vscode --extensionTestsPath=<dossier avec index.js exportant run()> ~/C64DevEnv` ; `run()` utilise `vscode.debug.startDebugging`, `registerDebugAdapterTrackerFactory`, `executeCommand('workbench.action.debug.stepOver')`… Le tracker voit une « read error » à chaque fin de session : VS Code tue l'adaptateur après `disconnect`, sans conséquence.
+
 ## Boucle de travail recommandée
 
 1. `make` (zéro warning).
@@ -97,7 +113,7 @@ screen [--lower] | capture F.png [--full] | label TEXTE|ADDR | info | ping | qui
 4. Corriger, `tools/stop.sh`, recommencer. `make test` avant de conclure.
 5. Pour montrer : `make run PROG=x` (visible), laisser la fenêtre ouverte.
 
-Les tests `tests/test_*.sh` sont des exemples complets de session automatisée (test 3 = débogage de bout en bout, test 4 = portail + cohérence). `make test` arrête l'instance VICE de l'utilisateur (tests 3 et 4 utilisent le moniteur) : le prévenir et la relancer ensuite.
+Les tests `tests/test_*.sh` sont des exemples complets de session automatisée (test 3 = débogage de bout en bout, test 4 = portail + cohérence, test 5 = VS Code/DAP + cohérence extension). `make test` arrête l'instance VICE de l'utilisateur (tests 3 et 4 utilisent le moniteur) : le prévenir et la relancer ensuite.
 
 ## Mémoire C64 utile
 
@@ -125,4 +141,5 @@ Couleurs : 0 noir, 1 blanc, 2 rouge, 3 cyan, 4 violet, 5 vert, 6 bleu, 7 jaune, 
 - Le paquet Ubuntu de VICE n'inclut pas les ROMs : `install.sh` les récupère depuis les sources officielles dans `~/.local/share/vice/C64` (ou compile VICE si la version est < 3.5).
 - `dbg.py` sert un client à la fois (les suivants attendent leur tour) ; `screen` suppose l'écran en `$0400` sauf argument.
 - VICE 3.7.1 envoie la réponse « display get » avec 4 octets de pixels en moins (coin inférieur droit, hors zone recadrée) : `dbg.py` complète.
+- `tools/stop.sh --all` ne tue que les processus `x64sc` et les `xvfb-run` qui lancent x64sc (plus de `pkill -f`, qui tuait aussi le shell appelant quand sa ligne de commande contenait « xvfb-run -a … x64sc »).
 - Le portail n'a pas d'authentification : il n'écoute que sur 127.0.0.1 (ne pas changer `PORTAL_HOST`).

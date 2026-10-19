@@ -199,13 +199,17 @@ class DebugInfo:
         self.files = {}
         self.entries = []    # (début, fin, fichier, ligne, type)
         self.segments = []   # (début, fin, nom)
+        self.modules = {}    # id -> {"name", "lib"} (lib : module de bibliothèque)
+        self.scopes = {}     # id -> {"name", "mod", "ranges" : [(début, fin)]}
+        self.syms = {}       # id -> {"name", "val", "seg", "type", "scope"}
+        self.csyms = []      # symboles C : {"name", "scope", "sc", "offs"}
         if not path or not os.path.isfile(path):
             return
-        segs, spans, lines = {}, {}, []
+        segs, seg_names, spans, lines, scopes = {}, {}, {}, [], []
         with open(path, encoding="utf-8", errors="replace") as f:
             for raw in f:
                 kind, _, rest = raw.rstrip("\n").partition("\t")
-                if kind not in ("file", "seg", "span", "line"):
+                if kind not in ("file", "seg", "span", "line", "mod", "scope", "sym", "csym"):
                     continue
                 d = {k: v.strip('"') for k, v in DBG_FIELD_RE.findall(rest)}
                 if kind == "file":
@@ -213,12 +217,34 @@ class DebugInfo:
                 elif kind == "seg":
                     start, size = int(d["start"], 16), int(d["size"], 16)
                     segs[int(d["id"])] = start
+                    seg_names[int(d["id"])] = d["name"]
                     if size:
                         self.segments.append((start, start + size - 1, d["name"]))
                 elif kind == "span":
                     spans[int(d["id"])] = (int(d["seg"]), int(d["start"]), int(d["size"]))
-                else:
+                elif kind == "line":
                     lines.append(d)
+                elif kind == "mod":
+                    self.modules[int(d["id"])] = {"name": d["name"], "lib": "lib" in d}
+                elif kind == "scope":
+                    scopes.append(d)
+                elif kind == "sym":
+                    if "val" in d:
+                        self.syms[int(d["id"])] = {
+                            "name": d["name"], "val": int(d["val"], 16),
+                            "seg": seg_names.get(int(d["seg"])) if "seg" in d else None,
+                            "type": d.get("type", ""), "scope": int(d.get("scope", -1))}
+                else:
+                    self.csyms.append({"name": d["name"], "scope": int(d.get("scope", -1)),
+                                       "sc": d.get("sc", ""), "offs": int(d.get("offs", 0))})
+        for d in scopes:
+            ranges = []
+            for sid in d.get("span", "").split("+") if d.get("span") else []:
+                seg, off, size = spans[int(sid)]
+                if size > 0:
+                    ranges.append((segs[seg] + off, segs[seg] + off + size - 1))
+            self.scopes[int(d["id"])] = {"name": d["name"], "mod": int(d.get("mod", -1)),
+                                         "ranges": ranges}
         for d in lines:
             line = int(d.get("line", 0))
             if "span" not in d or line <= 0:
@@ -245,6 +271,35 @@ class DebugInfo:
                 if best is None or key < best[0]:
                     best = (key, fname, line)
         return (best[1], best[2]) if best else None
+
+    def is_user_scope(self, scope_id):
+        """Vrai si la portée appartient à un module du programme (pas à une
+        bibliothèque cc65)."""
+        scope = self.scopes.get(scope_id)
+        mod = self.modules.get(scope["mod"]) if scope else None
+        return bool(mod) and not mod["lib"]
+
+    def user_symbols(self):
+        """Symboles du programme : [(nom, adresse, segment, type)] ; les
+        labels des modules de bibliothèque sont exclus."""
+        return sorted(((s["name"], s["val"], s["seg"], s["type"]) for s in self.syms.values()
+                       if self.is_user_scope(s["scope"])), key=lambda t: (t[1], t[0]))
+
+    def function_at(self, addr):
+        """Fonction C contenant addr : (id de portée, nom sans « _ ») ou None."""
+        best = None
+        for sid, scope in self.scopes.items():
+            if not scope["name"]:
+                continue
+            for start, end in scope["ranges"]:
+                if start <= addr <= end and (best is None or end - start < best[0]):
+                    best = (end - start, sid, scope["name"])
+        return (best[1], best[2][1:] if best[2].startswith("_") else best[2]) if best else None
+
+    def locals_of(self, scope_id):
+        """Variables automatiques (pile C) de la fonction : [(nom, décalage)]."""
+        return [(c["name"], c["offs"]) for c in self.csyms
+                if c["scope"] == scope_id and c["sc"] == "auto"]
 
     def segment_of(self, addr):
         for start, end, name in self.segments:
@@ -1287,23 +1342,27 @@ def cmd_disasm(mon, labels, args):
             break
         for name in [n for n in labels.by_addr.get(addr, []) if not n.startswith("__")][:1]:
             print("          %s:" % name)
-        seg = dbgi.segment_of(addr)
-        if seg and seg[2] not in CODE_SEGMENTS:
-            # Données (RODATA, DATA, en-tête BASIC...) : .byte, 8 par ligne,
-            # sans dépasser le segment ni le label suivant.
-            size = 1
-            while (size < 8 and addr + size <= seg[1] and addr + size - base < len(mem)
-                   and not labels.by_addr.get(addr + size)):
-                size += 1
-            raw = mem[addr - base:addr - base + size]
-            text = ".byte " + ",".join("$%02x" % b for b in raw)
-            raw = raw[:3]  # colonne octets : 3 premiers
-        else:
-            size, raw, text = decode(mem, base, addr, labels)
+        size, raw, text = decode_at(mem, base, addr, labels, dbgi)
+        raw = raw[:3]  # colonne octets : 3 premiers (.byte en a jusqu'à 8)
         mark = ">" if addr == pc else " "
         bp = "*" if any(s <= addr <= e for s, e in bps) else " "
         print("%s%s  %04x  %-8s  %s" % (mark, bp, addr, " ".join("%02x" % b for b in raw), text))
         addr += size
+
+
+def decode_at(mem, base, addr, labels, dbgi):
+    """Comme decode(), mais les segments de données (RODATA, DATA, en-tête
+    BASIC...) donnent des .byte, 8 par ligne au plus, sans dépasser le
+    segment ni le label suivant. Utilisé par disasm et par tools/dap.py."""
+    seg = dbgi.segment_of(addr)
+    if seg and seg[2] not in CODE_SEGMENTS:
+        size = 1
+        while (size < 8 and addr + size <= seg[1] and addr + size - base < len(mem)
+               and not labels.by_addr.get(addr + size)):
+            size += 1
+        raw = mem[addr - base:addr - base + size]
+        return size, raw, ".byte " + ",".join("$%02x" % b for b in raw)
+    return decode(mem, base, addr, labels)
 
 
 def cmd_where(mon, labels, args):

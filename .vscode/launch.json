@@ -1,0 +1,36 @@
+{
+  // Débogage C64 (extension c64devenv.c64-vice : make vscode).
+  // F5 sur un .s ou un .c de src/ ou examples/ : compile, lance VICE et
+  // s'arrête au début (main en C, point d'entrée en asm).
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "c64",
+      "request": "launch",
+      "name": "C64 : fichier courant (VICE visible)",
+      "program": "${file}",
+      "stopOnEntry": true
+    },
+    {
+      "type": "c64",
+      "request": "launch",
+      "name": "C64 : fichier courant, jusqu'au 1er point d'arrêt",
+      "program": "${file}",
+      "stopOnEntry": false
+    },
+    {
+      "type": "c64",
+      "request": "launch",
+      "name": "C64 : fichier courant (invisible, warp)",
+      "program": "${file}",
+      "mode": "headless",
+      "warp": true,
+      "stopOnEntry": true
+    },
+    {
+      "type": "c64",
+      "request": "attach",
+      "name": "C64 : s'attacher à VICE (make debug / portail)"
+    }
+  ]
+}

@@ -74,11 +74,25 @@ tools/dbg.py quit                         # ou tools/stop.sh
 
 Les labels de `build/<prog>.labels` sont chargés dans VICE et utilisables par nom dans `dbg.py`. Détails, conventions mémoire et limites : voir `CLAUDE.md`.
 
+## Déboguer dans VS Code (asm et C)
+
+Une fois : `make vscode` (installe l'extension du dépôt dans VS Code côté WSL), puis ouvrez le dossier dans VS Code depuis Ubuntu (`cd ~/C64DevEnv && code .`) ; si VS Code était déjà ouvert : `Ctrl+Shift+P` → « Developer: Reload Window ».
+
+1. Ouvrez un `.s` ou un `.c` de `src/` ou `examples/` (ex. `examples/squares_c/squares.c`).
+2. `F9` (ou clic dans la marge) pose un point d'arrêt.
+3. `F5` : compile, ouvre VICE et s'arrête au début (`main` en C, première instruction en asm). Les configurations sont dans `.vscode/launch.json` (VICE visible, invisible + warp, jusqu'au premier point d'arrêt, s'attacher à un VICE déjà lancé).
+4. `F10` ligne suivante, `F11` entrer dans la fonction (les appels ROM ou bibliothèque cc65 sont franchis d'un bloc), `Maj+F11` sortir, `F5` continuer, `Maj+F5` arrêter (ferme VICE).
+
+Panneau Variables : registres (modifiables), locales et globales C avec leur type, données du programme asm, pile 6502, écran texte. Survol d'un nom dans le source : sa valeur (`VIC_BORDERCOLOR` → `$d020 → $fe`). Espions : `total`, `message,s` (chaîne), `$0400,40` (40 octets), `ptr,w` (mot). Console de débogage : toutes les commandes de `dbg.py` (`regs`, `mem $0400 32`, `screen`, `disasm`…). Clic droit → « Open Disassembly View » pour le pas à pas instruction par instruction. Un clic droit sur une variable propose un point d'arrêt sur sa modification.
+
+Pour déboguer une instance lancée par `make debug PROG=xxx` ou par le portail (case Moniteur) : configuration « C64 : s'attacher à VICE ». Le portail, `dbg.py` et VS Code pilotent la même instance en même temps.
+
 ## Arborescence
 
 - `src/` : vos programmes (un sous-répertoire par programme, `.s` et/ou `.c`)
-- `examples/` : `hello` (ca65, boucle infinie pour les tests), `hello_rts` (ca65, rend la main au BASIC : idéal pour `make run` et taper des commandes), `hello_c` (cc65)
-- `tools/` : `install.sh`, `run.sh`, `stop.sh`, `dbg.py`, `mklabels.py`, `portal.py` + `portal/` + `portal.sh` (portail web)
+- `examples/` : `hello` (ca65, boucle infinie pour les tests), `hello_rts` (ca65, rend la main au BASIC : idéal pour `make run` et taper des commandes), `hello_c` (cc65), `squares_c` (cc65, pour le pas à pas : fonction, locales, globales)
+- `tools/` : `install.sh`, `run.sh`, `stop.sh`, `dbg.py`, `mklabels.py`, `portal.py` + `portal/` + `portal.sh` (portail web), `dap.py` + `vscode/` + `vscode-install.sh` (débogage VS Code)
+- `.vscode/` : configurations de débogage et tâches (make) pour VS Code
 - `tests/` : tests lancés par `make test`
 - `build/` : artefacts générés (ignoré par git)
 - `var/` : état du portail (PID, journal ; ignoré par git)

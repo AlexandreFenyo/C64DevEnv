@@ -1,0 +1,99 @@
+{
+  "name": "c64-vice",
+  "displayName": "C64 VICE (C64DevEnv)",
+  "description": "Débogage pas à pas de programmes C64 (ca65, cc65) dans VICE, via tools/dap.py du dépôt C64DevEnv.",
+  "version": "0.1.0",
+  "publisher": "c64devenv",
+  "license": "MIT",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Debuggers", "Programming Languages"],
+  "extensionKind": ["workspace"],
+  "main": "./extension.js",
+  "activationEvents": ["onDebug", "onDebugResolve:c64", "onDebugDynamicConfigurations:c64", "onLanguage:ca65"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "ca65",
+        "aliases": ["ca65 (6502)", "ca65"],
+        "extensions": [".s", ".ca65"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      { "language": "ca65", "scopeName": "source.ca65", "path": "./syntaxes/ca65.tmLanguage.json" }
+    ],
+    "breakpoints": [
+      { "language": "ca65" },
+      { "language": "c" },
+      { "language": "kickassembler" }
+    ],
+    "debuggers": [
+      {
+        "type": "c64",
+        "label": "C64 (VICE)",
+        "languages": ["ca65", "c"],
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Programme : fichier source (${file}), nom (hello_rts) ou build/xxx.prg",
+                "default": "${file}"
+              },
+              "mode": {
+                "type": "string",
+                "enum": ["show", "headless"],
+                "description": "show : fenêtre VICE visible (WSLg) ; headless : invisible",
+                "default": "show"
+              },
+              "warp": { "type": "boolean", "description": "Vitesse maximale (--warp)", "default": false },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "S'arrêter au début : main (C) ou point d'entrée (asm)",
+                "default": true
+              },
+              "build": { "type": "boolean", "description": "Lancer make avant", "default": true },
+              "port": { "type": "number", "description": "Port du moniteur binaire", "default": 6502 }
+            }
+          },
+          "attach": {
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Programme chargé (labels et sources) ; défaut : celui lancé par run.sh --monitor"
+              },
+              "port": { "type": "number", "description": "Port du moniteur binaire", "default": 6502 }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "c64",
+            "request": "launch",
+            "name": "C64 : fichier courant (VICE visible)",
+            "program": "${file}",
+            "stopOnEntry": true
+          },
+          {
+            "type": "c64",
+            "request": "attach",
+            "name": "C64 : s'attacher à VICE (make debug / portail)"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "C64 : lancer dans VICE",
+            "description": "Compile, lance VICE et débogue le programme du fichier courant",
+            "body": { "type": "c64", "request": "launch", "name": "C64 : fichier courant", "program": "^\"\\${file}\"", "stopOnEntry": true }
+          },
+          {
+            "label": "C64 : s'attacher à VICE",
+            "description": "Instance lancée par make debug ou par le portail (case Moniteur)",
+            "body": { "type": "c64", "request": "attach", "name": "C64 : attacher" }
+          }
+        ]
+      }
+    ]
+  }
+}

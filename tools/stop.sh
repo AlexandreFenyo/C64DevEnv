@@ -75,6 +75,11 @@ if [ "$ALL" = 1 ]; then
         pkill -u "$(id -u)" -KILL -x x64sc 2>/dev/null
         say "x64sc orphelins tués"
     fi
-    pkill -u "$(id -u)" -TERM -f "xvfb-run -a .*x64sc" 2>/dev/null
+    # xvfb-run lancés pour x64sc : uniquement les processus xvfb-run eux-mêmes
+    # (pas « pkill -f », qui tuerait aussi un shell dont la ligne de
+    # commande contient ce texte).
+    for p in $(pgrep -u "$(id -u)" -x xvfb-run 2>/dev/null); do
+        tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -qw x64sc && kill -TERM "$p" 2>/dev/null
+    done
 fi
 exit $rc
