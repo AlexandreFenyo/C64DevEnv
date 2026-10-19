@@ -1,0 +1,889 @@
+#!/usr/bin/env python3
+"""dbg.py - client en ligne de commande du moniteur binaire de VICE (>= 3.5).
+
+Bibliothèque standard uniquement. VICE doit avoir été lancé avec
+tools/run.sh --monitor (port 6502 par défaut).
+
+Usage : dbg.py [--port P] [--labels FICHIER] [--timeout S] COMMANDE [ARGS...]
+
+Commandes :
+  regs                    registres : A X Y SP PC FLAGS
+  mem ADDR [LEN]          hexdump (LEN défaut 64)
+  poke ADDR VAL [VAL...]  écrit un ou plusieurs octets
+  break ADDR [ADDR2]      point d'arrêt à l'exécution (plage optionnelle)
+  watch ADDR [ADDR2]      point d'arrêt en lecture/écriture
+  delete N                supprime le point d'arrêt N
+  list                    liste les points d'arrêt
+  step [N]                exécute N instructions (défaut 1), reste arrêté
+  next                    comme step mais passe par-dessus les JSR
+  cont                    reprend l'exécution
+  wait [SECONDES]         attend l'arrêt sur un point d'arrêt (défaut 10 s)
+  status                  running|stopped + PC, sans toucher à l'émulateur
+  reset                   reset logiciel du C64 ("reset hard" : matériel)
+  dump ADDR LEN FICHIER   sauve LEN octets dans un fichier binaire
+  screen [--lower]        mémoire écran ($0400-$07E7) rendue en texte
+  label TEXTE|ADDR        recherche un symbole (sous-chaîne) ou une adresse
+  info                    version de VICE
+  quit                    arrête VICE
+
+Adresses : décimal (1024), $hexa ($0400), 0xhexa (0x400), nom de label
+(start, .start), ou label+/-décalage (start+3). Les labels viennent de
+--labels, de $C64_LABELS ou de build/vice.labels (écrit par run.sh).
+
+Fonctionnement : VICE ne garde un point d'arrêt actif, et ne reste arrêté,
+que tant qu'un client du moniteur binaire est connecté. dbg.py passe donc
+par un petit démon (dbg.py --daemon, lancé par run.sh --monitor, socket
+Unix build/dbg.sock) qui conserve la connexion à VICE et mémorise l'état.
+Si le démon n'est pas lancé alors que VICE l'est, il est démarré à la volée.
+
+Une commande d'inspection laisse l'émulateur dans l'état où elle l'a
+trouvé : s'il tournait, il repart ; s'il était arrêté, il le reste.
+Codes de sortie : 0 ok, 1 erreur de commande, 2 VICE injoignable,
+3 délai dépassé.
+"""
+import argparse
+import os
+import selectors
+import socket
+import struct
+import subprocess
+import sys
+import time
+
+STX = 0x02
+API_VERSION = 0x02
+EVENT_REQ_ID = 0xFFFFFFFF
+CMD_HEADER = struct.Struct("<BBIIB")      # stx, api, len, req_id, cmd
+RESP_HEADER = struct.Struct("<BBIBBI")    # stx, api, len, type, err, req_id
+
+# Commandes
+CMD_MEM_GET = 0x01
+CMD_MEM_SET = 0x02
+CMD_CHECKPOINT_GET = 0x11
+CMD_CHECKPOINT_SET = 0x12
+CMD_CHECKPOINT_DELETE = 0x13
+CMD_CHECKPOINT_LIST = 0x14
+CMD_CHECKPOINT_TOGGLE = 0x15
+CMD_REGISTERS_GET = 0x31
+CMD_REGISTERS_SET = 0x32
+CMD_ADVANCE = 0x71
+CMD_KEYBOARD_FEED = 0x72
+CMD_PING = 0x81
+CMD_REGISTERS_AVAILABLE = 0x83
+CMD_VICE_INFO = 0x85
+CMD_EXIT = 0xAA
+CMD_QUIT = 0xBB
+CMD_RESET = 0xCC
+CMD_DAEMON_STATUS = 0xF0   # propre à dbg.py : traité par le démon, jamais envoyé à VICE
+
+# Réponses / événements
+RESP_CHECKPOINT_INFO = 0x11
+RESP_REGISTERS = 0x31
+RESP_JAM = 0x61
+RESP_STOPPED = 0x62
+RESP_RESUMED = 0x63
+
+# Commandes dont la réponse n'a pas le même code que la commande.
+RESPONSE_OF = {CMD_CHECKPOINT_SET: RESP_CHECKPOINT_INFO,
+               CMD_CHECKPOINT_GET: RESP_CHECKPOINT_INFO,
+               CMD_REGISTERS_SET: RESP_REGISTERS}
+
+ERRORS = {
+    0x00: "ok", 0x01: "objet inexistant", 0x02: "espace mémoire invalide",
+    0x80: "longueur de commande invalide", 0x81: "paramètre invalide",
+    0x82: "version d'API invalide", 0x83: "type de commande invalide",
+    0x84: "échec général",
+}
+
+OP_LOAD, OP_STORE, OP_EXEC = 1, 2, 4
+SCREEN_BASE, SCREEN_SIZE = 0x0400, 1000
+TRACE = bool(os.environ.get("DBG_TRACE"))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BUILD = os.path.join(ROOT, "build")
+
+
+class DbgError(Exception):
+    exit_code = 1
+
+
+class NotRunning(DbgError):
+    exit_code = 2
+
+
+class Timeout(DbgError):
+    exit_code = 3
+
+
+def trace(fmt, *args):
+    if TRACE:
+        print(fmt % args, file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Labels
+# ---------------------------------------------------------------------------
+class Labels:
+    def __init__(self, path):
+        self.path = path
+        self.by_name = {}
+        self.by_addr = {}
+        if path and os.path.isfile(path):
+            with open(path, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) != 3 or parts[0] != "al":
+                        continue
+                    addr = int(parts[1].split(":")[-1], 16)
+                    name = parts[2].lstrip(".")
+                    self.by_name[name] = addr
+                    self.by_addr.setdefault(addr, []).append(name)
+
+    def lookup(self, name):
+        if name in self.by_name:
+            return self.by_name[name]
+        lower = {k.lower(): v for k, v in self.by_name.items()}
+        return lower.get(name.lower())
+
+    def search(self, text):
+        text = text.lower()
+        return sorted((a, n) for n, a in self.by_name.items() if text in n.lower())
+
+    def name_of(self, addr):
+        names = self.by_addr.get(addr)
+        return names[0] if names else None
+
+
+def parse_int(text):
+    t = text.strip().lower()
+    if t.startswith("$"):
+        return int(t[1:], 16)
+    if t.startswith("0x"):
+        return int(t[2:], 16)
+    return int(t, 10)
+
+
+def parse_addr(text, labels):
+    """décimal, $hex, 0xhex, label, label+N, label-N."""
+    t = text.strip()
+    try:
+        v = parse_int(t)
+    except ValueError:
+        v = None
+    if v is None:
+        base, sign, off = t, 0, "0"
+        for sep in ("+", "-"):
+            if sep in t[1:]:
+                i = t.rfind(sep)
+                base, off = t[:i], t[i + 1:]
+                sign = 1 if sep == "+" else -1
+                break
+        addr = labels.lookup(base.lstrip("."))
+        if addr is None:
+            raise DbgError("adresse ou label inconnu : %s" % text)
+        v = addr
+        if sign:
+            try:
+                v += sign * parse_int(off)
+            except ValueError:
+                raise DbgError("décalage invalide : %s" % text)
+    if not 0 <= v <= 0xFFFF:
+        raise DbgError("adresse hors de $0000-$FFFF : %s" % text)
+    return v
+
+
+# ---------------------------------------------------------------------------
+# Trames
+# ---------------------------------------------------------------------------
+class Frame:
+    """Une réponse ou un événement VICE."""
+    __slots__ = ("type", "error", "req_id", "body")
+
+    def __init__(self, rtype, error, req_id, body):
+        self.type, self.error, self.req_id, self.body = rtype, error, req_id, body
+
+    @property
+    def is_event(self):
+        return self.req_id == EVENT_REQ_ID
+
+    def pack(self):
+        return RESP_HEADER.pack(STX, API_VERSION, len(self.body), self.type,
+                                self.error, self.req_id) + self.body
+
+
+def parse_checkpoint(body):
+    num, hit, start, end, stop, enabled, op, temp, hits, ignore, cond, memspace = \
+        struct.unpack("<IBHHBBBBIIBB", body[:23])
+    return {"num": num, "hit": bool(hit), "start": start, "end": end,
+            "stop": bool(stop), "enabled": bool(enabled), "op": op,
+            "temp": bool(temp), "hits": hits, "ignore": ignore,
+            "cond": bool(cond), "memspace": memspace}
+
+
+class FrameReader:
+    """Découpe un flux d'octets en trames (sens VICE -> client, ou client ->
+    VICE si request=True)."""
+
+    def __init__(self, request=False):
+        self.buf = b""
+        self.request = request
+        self.header = CMD_HEADER if request else RESP_HEADER
+
+    def feed(self, data):
+        self.buf += data
+        frames = []
+        while len(self.buf) >= self.header.size:
+            fields = self.header.unpack(self.buf[:self.header.size])
+            if fields[0] != STX:
+                raise DbgError("flux désynchronisé (0x%02x)" % fields[0])
+            length = fields[2]
+            total = self.header.size + length
+            if len(self.buf) < total:
+                break
+            body = self.buf[self.header.size:total]
+            self.buf = self.buf[total:]
+            if self.request:
+                frames.append((fields[3], fields[4], body))      # req_id, cmd, body
+            else:
+                frames.append(Frame(fields[3], fields[4], fields[5], body))
+        return frames
+
+
+# ---------------------------------------------------------------------------
+# Démon : garde la connexion à VICE, mémorise l'état, sert un client à la fois
+# ---------------------------------------------------------------------------
+class Daemon:
+    def __init__(self, port, sock_path):
+        self.port = port
+        self.sock_path = sock_path
+        self.stopped = False
+        self.pc = 0
+        self.last_hit = None
+        self.vice_reader = FrameReader()
+        self.client_reader = FrameReader(request=True)
+        self.client = None
+
+    def run(self):
+        try:
+            vice = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        except OSError as e:
+            sys.exit("dbg.py --daemon: VICE injoignable sur le port %d (%s)" % (self.port, e))
+        vice.setblocking(False)
+        if os.path.exists(self.sock_path):
+            os.unlink(self.sock_path)
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        srv.bind(self.sock_path)
+        srv.listen(8)
+        srv.setblocking(False)
+        sel = selectors.DefaultSelector()
+        sel.register(vice, selectors.EVENT_READ, "vice")
+        sel.register(srv, selectors.EVENT_READ, "srv")
+        print("dbg.py --daemon: connecté à VICE :%d, socket %s" % (self.port, self.sock_path),
+              flush=True)
+        try:
+            while True:
+                for key, _ in sel.select():
+                    if key.data == "vice":
+                        data = vice.recv(65536)
+                        if not data:
+                            print("dbg.py --daemon: VICE a fermé la connexion", flush=True)
+                            return
+                        for frame in self.vice_reader.feed(data):
+                            self.on_vice_frame(frame)
+                    elif key.data == "srv":
+                        conn, _ = srv.accept()
+                        if self.client is not None:
+                            # Un seul client à la fois : les suivants attendent
+                            # dans la file d'écoute, on ne les accepte pas encore.
+                            self.pending = conn
+                            continue
+                        self.attach(sel, conn)
+                    elif key.data == "client":
+                        try:
+                            data = key.fileobj.recv(65536)
+                        except OSError:
+                            data = b""
+                        if not data:
+                            self.detach(sel)
+                            continue
+                        try:
+                            frames = self.client_reader.feed(data)
+                        except DbgError:
+                            self.detach(sel)
+                            continue
+                        for req_id, cmd, body in frames:
+                            self.on_client_frame(vice, req_id, cmd, body)
+        finally:
+            try:
+                os.unlink(self.sock_path)
+            except OSError:
+                pass
+
+    pending = None
+
+    def attach(self, sel, conn):
+        conn.setblocking(False)
+        self.client = conn
+        self.client_reader = FrameReader(request=True)
+        sel.register(conn, selectors.EVENT_READ, "client")
+
+    def detach(self, sel):
+        sel.unregister(self.client)
+        try:
+            self.client.close()
+        except OSError:
+            pass
+        self.client = None
+        if self.pending is not None:
+            conn, self.pending = self.pending, None
+            self.attach(sel, conn)
+
+    def on_vice_frame(self, frame):
+        trace("daemon <- vice type=%02x err=%02x req=%08x len=%d", frame.type,
+              frame.error, frame.req_id, len(frame.body))
+        if frame.is_event:
+            if frame.type == RESP_STOPPED and len(frame.body) >= 2:
+                self.stopped = True
+                self.pc = struct.unpack("<H", frame.body[:2])[0]
+            elif frame.type == RESP_RESUMED:
+                self.stopped = False
+                self.last_hit = None
+            elif frame.type == RESP_CHECKPOINT_INFO:
+                cp = parse_checkpoint(frame.body)
+                if cp["hit"]:
+                    self.last_hit = cp["num"]
+        if self.client is not None:
+            try:
+                self.client.sendall(frame.pack())
+            except OSError:
+                pass
+
+    def on_client_frame(self, vice, req_id, cmd, body):
+        trace("daemon <- client cmd=%02x req=%08x", cmd, req_id)
+        if cmd == CMD_DAEMON_STATUS:
+            hit = self.last_hit if self.last_hit is not None else 0xFFFFFFFF
+            resp = Frame(CMD_DAEMON_STATUS, 0, req_id,
+                         struct.pack("<BHI", 1 if self.stopped else 0, self.pc, hit))
+            self.client.sendall(resp.pack())
+            return
+        if cmd == CMD_EXIT:
+            # L'événement "resumed" arrive après la réponse : on anticipe,
+            # l'événement confirmera.
+            self.stopped = False
+            self.last_hit = None
+        elif cmd == CMD_CHECKPOINT_DELETE and len(body) >= 4:
+            if struct.unpack("<I", body[:4])[0] == self.last_hit:
+                self.last_hit = None
+        pkt = CMD_HEADER.pack(STX, API_VERSION, len(body), req_id, cmd) + body
+        vice.sendall(pkt)
+
+
+def daemon_sock_path():
+    return os.environ.get("C64_DBG_SOCK", os.path.join(BUILD, "dbg.sock"))
+
+
+def spawn_daemon(port, sock_path):
+    """Lance dbg.py --daemon détaché ; attend que la socket apparaisse."""
+    log = open(os.path.join(BUILD, "dbg.log"), "ab")
+    proc = subprocess.Popen(
+        [sys.executable, os.path.abspath(__file__), "--port", str(port), "--daemon",
+         "--sock", sock_path],
+        stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
+    with open(os.path.join(BUILD, "dbg.pid"), "w") as f:
+        f.write("%d\n" % proc.pid)
+    for _ in range(50):
+        if os.path.exists(sock_path):
+            return
+        if proc.poll() is not None:
+            break
+        time.sleep(0.1)
+    raise NotRunning("impossible de démarrer le démon dbg.py (voir build/dbg.log)")
+
+
+# ---------------------------------------------------------------------------
+# Client (via le démon)
+# ---------------------------------------------------------------------------
+class Monitor:
+    def __init__(self, port, timeout, sock_path=None):
+        self.timeout = timeout
+        self.next_id = 1
+        self.reader = FrameReader()
+        self.queue = []
+        self.checkpoint_hits = []
+        self.touched_vice = False
+        sock_path = sock_path or daemon_sock_path()
+        self.sock = self._connect(sock_path, port)
+        self.sock.settimeout(timeout)
+        st = self.status()
+        self.was_stopped = st["stopped"]
+
+    def _connect(self, sock_path, port):
+        for attempt in range(2):
+            try:
+                s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                s.settimeout(self.timeout)
+                s.connect(sock_path)
+                return s
+            except OSError:
+                s.close()
+                if attempt == 1:
+                    break
+                # Pas de démon : VICE tourne-t-il ? Si oui, on lance le démon.
+                try:
+                    probe = socket.create_connection(("127.0.0.1", port), timeout=1)
+                    probe.close()
+                except OSError as e:
+                    raise NotRunning(
+                        "VICE n'est pas lancé avec --monitor (port %d : %s). "
+                        "Lancez : tools/run.sh --headless --monitor build/<prog>.prg"
+                        % (port, e.strerror or e))
+                spawn_daemon(port, sock_path)
+        raise NotRunning("démon dbg.py injoignable (%s)" % sock_path)
+
+    def close(self):
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+    # --- bas niveau -------------------------------------------------------
+    def read_frame(self):
+        while not self.queue:
+            try:
+                data = self.sock.recv(65536)
+            except socket.timeout:
+                raise Timeout("pas de réponse de VICE en %.1f s" % self.timeout)
+            if not data:
+                raise NotRunning("connexion fermée par le démon dbg.py (VICE arrêté ?)")
+            self.queue.extend(self.reader.feed(data))
+        frame = self.queue.pop(0)
+        trace("<- type=%02x err=%02x req=%08x len=%d %s", frame.type, frame.error,
+              frame.req_id, len(frame.body), frame.body[:16].hex())
+        if frame.is_event and frame.type == RESP_CHECKPOINT_INFO:
+            self.checkpoint_hits.append(parse_checkpoint(frame.body))
+        return frame
+
+    def send(self, cmd, body=b""):
+        req_id = self.next_id
+        self.next_id += 1
+        trace("-> cmd=%02x req=%08x %s", cmd, req_id, body.hex())
+        if cmd != CMD_DAEMON_STATUS:
+            self.touched_vice = True  # VICE s'est mis en pause pour nous
+        self.sock.sendall(CMD_HEADER.pack(STX, API_VERSION, len(body), req_id, cmd) + body)
+        return req_id
+
+    def call(self, cmd, body=b"", collect=None):
+        """Envoie une commande et attend sa réponse ; les réponses
+        intermédiaires (ex. 0x11 avant 0x14) vont dans collect."""
+        expected = RESPONSE_OF.get(cmd, cmd)
+        req_id = self.send(cmd, body)
+        while True:
+            frame = self.read_frame()
+            if frame.req_id != req_id:
+                continue
+            if frame.type == expected or frame.error:
+                break
+            if collect is not None:
+                collect.append(frame)
+        if frame.error:
+            raise DbgError("VICE a refusé la commande 0x%02x : %s"
+                           % (cmd, ERRORS.get(frame.error, "erreur 0x%02x" % frame.error)))
+        return frame
+
+    # --- commandes --------------------------------------------------------
+    def status(self):
+        resp = self.call(CMD_DAEMON_STATUS)
+        stopped, pc, hit = struct.unpack("<BHI", resp.body[:7])
+        return {"stopped": bool(stopped), "pc": pc, "hit": None if hit == 0xFFFFFFFF else hit}
+
+    def ping(self):
+        self.call(CMD_PING)
+
+    def exit_monitor(self):
+        self.call(CMD_EXIT)
+
+    def mem_get(self, start, end):
+        resp = self.call(CMD_MEM_GET, struct.pack("<BHHBH", 0, start, end, 0, 0))
+        (length,) = struct.unpack("<H", resp.body[:2])
+        return resp.body[2:2 + length]
+
+    def mem_set(self, start, data):
+        self.call(CMD_MEM_SET, struct.pack("<BHHBH", 0, start, start + len(data) - 1, 0, 0) + data)
+
+    def registers_available(self):
+        resp = self.call(CMD_REGISTERS_AVAILABLE, bytes([0]))
+        (count,) = struct.unpack("<H", resp.body[:2])
+        pos, regs = 2, {}
+        for _ in range(count):
+            size = resp.body[pos]
+            rid, bits, nlen = resp.body[pos + 1], resp.body[pos + 2], resp.body[pos + 3]
+            regs[rid] = (resp.body[pos + 4:pos + 4 + nlen].decode("ascii", "replace"), bits)
+            pos += 1 + size
+        return regs
+
+    def registers(self):
+        names = self.registers_available()
+        resp = self.call(CMD_REGISTERS_GET, bytes([0]))
+        (count,) = struct.unpack("<H", resp.body[:2])
+        pos, values = 2, {}
+        for _ in range(count):
+            size = resp.body[pos]
+            rid = resp.body[pos + 1]
+            (val,) = struct.unpack("<H", resp.body[pos + 2:pos + 4])
+            values[names.get(rid, ("R%d" % rid, 16))[0]] = val
+            pos += 1 + size
+        return values
+
+    def checkpoint_set(self, start, end, op, stop=True, temporary=False):
+        body = struct.pack("<HHBBBBB", start, end, 1 if stop else 0, 1, op,
+                           1 if temporary else 0, 0)
+        return parse_checkpoint(self.call(CMD_CHECKPOINT_SET, body).body)
+
+    def checkpoint_delete(self, num):
+        self.call(CMD_CHECKPOINT_DELETE, struct.pack("<I", num))
+
+    def checkpoint_list(self):
+        infos = []
+        self.call(CMD_CHECKPOINT_LIST, collect=infos)
+        # VICE liste un checkpoint load+store une fois par liste interne :
+        # on dédoublonne par numéro.
+        seen, cps = set(), []
+        for f in infos:
+            if f.type != RESP_CHECKPOINT_INFO:
+                continue
+            cp = parse_checkpoint(f.body)
+            if cp["num"] not in seen:
+                seen.add(cp["num"])
+                cps.append(cp)
+        return cps
+
+    def advance(self, count, step_over):
+        self.call(CMD_ADVANCE, struct.pack("<BH", 1 if step_over else 0, count))
+
+    def reset(self, hard=False):
+        self.call(CMD_RESET, bytes([1 if hard else 0]))
+
+    def quit(self):
+        self.call(CMD_QUIT)
+
+    def vice_info(self):
+        resp = self.call(CMD_VICE_INFO)
+        n = resp.body[0]
+        ver = ".".join(str(b) for b in resp.body[1:1 + n])
+        m = resp.body[1 + n]
+        rev = struct.unpack("<I", resp.body[2 + n:2 + n + m])[0] if m == 4 else 0
+        return ver, rev
+
+    def wait_stopped(self, seconds):
+        """Attend un événement d'arrêt ; renvoie le PC ou None."""
+        deadline = time.monotonic() + seconds
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self.sock.settimeout(remaining)
+                try:
+                    frame = self.read_frame()
+                except Timeout:
+                    return None
+                if frame.is_event and frame.type == RESP_STOPPED:
+                    return struct.unpack("<H", frame.body[:2])[0]
+        finally:
+            self.sock.settimeout(self.timeout)
+
+
+# ---------------------------------------------------------------------------
+# Affichage
+# ---------------------------------------------------------------------------
+def flags_str(fl):
+    return "".join(n if fl & (0x80 >> i) else "." for i, n in enumerate("NV-BDIZC"))
+
+
+def fmt_regs(r):
+    return ("A=%02x X=%02x Y=%02x SP=%02x PC=%04x FLAGS=%s (%02x)"
+            % (r.get("A", 0), r.get("X", 0), r.get("Y", 0), r.get("SP", 0),
+               r.get("PC", 0), flags_str(r.get("FL", 0)), r.get("FL", 0)))
+
+
+def fmt_checkpoint(cp, labels):
+    ops = "/".join(n for bit, n in ((OP_LOAD, "load"), (OP_STORE, "store"), (OP_EXEC, "exec"))
+                   if cp["op"] & bit) or "?"
+    rng = "$%04x" % cp["start"]
+    if cp["end"] != cp["start"]:
+        rng += "-$%04x" % cp["end"]
+    name = labels.name_of(cp["start"])
+    return ("checkpoint %d %s%s type=%s enabled=%d stop=%d hits=%d"
+            % (cp["num"], rng, " (%s)" % name if name else "", ops,
+               cp["enabled"], cp["stop"], cp["hits"]))
+
+
+def hexdump(addr, data):
+    lines = []
+    for i in range(0, len(data), 16):
+        chunk = data[i:i + 16]
+        hexs = " ".join("%02x" % b for b in chunk)
+        asc = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+        lines.append("%04x: %-47s |%s|" % (addr + i, hexs, asc))
+    return "\n".join(lines)
+
+
+def screen_code_to_char(code, lower=False):
+    code &= 0x7F  # ignore la vidéo inverse
+    if code == 0:
+        return "@"
+    if 1 <= code <= 26:
+        return chr(ord("a" if lower else "A") + code - 1)
+    if 27 <= code <= 31:
+        return "[£]^<"[code - 27]
+    if 32 <= code <= 63:
+        return chr(code)
+    if code == 64:
+        return "-"
+    if lower and 65 <= code <= 90:
+        return chr(ord("A") + code - 65)
+    return "."  # caractère graphique
+
+
+def fmt_screen(data, lower=False):
+    return "\n".join("%02d|%s|" % (row, "".join(screen_code_to_char(c, lower)
+                                                 for c in data[row * 40:(row + 1) * 40]))
+                     for row in range(25))
+
+
+# ---------------------------------------------------------------------------
+# Sous-commandes
+# ---------------------------------------------------------------------------
+def need(args, n, usage):
+    if len(args) < n:
+        raise DbgError("usage : %s" % usage)
+
+
+def cmd_regs(mon, labels, args):
+    print(fmt_regs(mon.registers()))
+
+
+def cmd_mem(mon, labels, args):
+    need(args, 1, "mem ADDR [LEN]")
+    addr = parse_addr(args[0], labels)
+    length = parse_int(args[1]) if len(args) > 1 else 64
+    if length < 1 or addr + length - 1 > 0xFFFF:
+        raise DbgError("plage mémoire invalide")
+    print(hexdump(addr, mon.mem_get(addr, addr + length - 1)))
+
+
+def cmd_poke(mon, labels, args):
+    need(args, 2, "poke ADDR VAL [VAL...]")
+    addr = parse_addr(args[0], labels)
+    vals = [parse_int(v) for v in args[1:]]
+    if any(not 0 <= v <= 255 for v in vals):
+        raise DbgError("valeur hors de 0-255")
+    mon.mem_set(addr, bytes(vals))
+    print("poke %04x: %s" % (addr, " ".join("%02x" % v for v in vals)))
+
+
+def _set_checkpoint(mon, labels, args, op, usage):
+    need(args, 1, usage)
+    start = parse_addr(args[0], labels)
+    end = parse_addr(args[1], labels) if len(args) > 1 else start
+    print(fmt_checkpoint(mon.checkpoint_set(start, end, op), labels))
+
+
+def cmd_break(mon, labels, args):
+    _set_checkpoint(mon, labels, args, OP_EXEC, "break ADDR [ADDR2]")
+
+
+def cmd_watch(mon, labels, args):
+    _set_checkpoint(mon, labels, args, OP_LOAD | OP_STORE, "watch ADDR [ADDR2]")
+
+
+def cmd_delete(mon, labels, args):
+    need(args, 1, "delete N")
+    num = parse_int(args[0])
+    mon.checkpoint_delete(num)
+    print("checkpoint %d deleted" % num)
+
+
+def cmd_list(mon, labels, args):
+    cps = mon.checkpoint_list()
+    if not cps:
+        print("no checkpoints")
+    for cp in cps:
+        print(fmt_checkpoint(cp, labels))
+
+
+def cmd_step(mon, labels, args, step_over=False):
+    count = parse_int(args[0]) if args else 1
+    if not 1 <= count <= 0xFFFF:
+        raise DbgError("nombre de pas invalide")
+    mon.advance(count, step_over)
+    mon.was_stopped = True  # rester arrêté après un pas
+    print(fmt_regs(mon.registers()))
+
+
+def cmd_next(mon, labels, args):
+    cmd_step(mon, labels, args, step_over=True)
+
+
+def cmd_cont(mon, labels, args):
+    mon.exit_monitor()
+    mon.was_stopped = False
+    print("resumed")
+
+
+def _report_stop(mon, labels, pc, hit):
+    name = labels.name_of(pc)
+    print("stopped PC=%04x%s%s" % (pc, " (%s)" % name if name else "",
+                                   " checkpoint=%d" % hit if hit is not None else ""))
+
+
+def cmd_wait(mon, labels, args):
+    seconds = float(args[0]) if args else 10.0
+    st = mon.status()
+    if st["stopped"]:
+        _report_stop(mon, labels, st["pc"], st["hit"])
+        return
+    pc = mon.wait_stopped(seconds)
+    if pc is None:
+        raise Timeout("pas d'arrêt en %.1f s" % seconds)
+    hit = next((cp["num"] for cp in mon.checkpoint_hits if cp["hit"]), None)
+    mon.was_stopped = True
+    _report_stop(mon, labels, pc, hit)
+
+
+def cmd_status(mon, labels, args):
+    st = mon.status()
+    if st["stopped"]:
+        _report_stop(mon, labels, st["pc"], st["hit"])
+    else:
+        print("running")
+
+
+def cmd_reset(mon, labels, args):
+    mon.reset(hard=bool(args and args[0] == "hard"))
+    print("reset")
+
+
+def cmd_dump(mon, labels, args):
+    need(args, 3, "dump ADDR LEN FICHIER")
+    addr = parse_addr(args[0], labels)
+    length = parse_int(args[1])
+    if length < 1 or addr + length - 1 > 0xFFFF:
+        raise DbgError("plage mémoire invalide")
+    data = mon.mem_get(addr, addr + length - 1)
+    with open(args[2], "wb") as f:
+        f.write(data)
+    print("dump %04x-%04x (%d bytes) -> %s" % (addr, addr + length - 1, len(data), args[2]))
+
+
+def cmd_screen(mon, labels, args):
+    lower = "--lower" in args
+    rest = [a for a in args if not a.startswith("--")]
+    base = parse_addr(rest[0], labels) if rest else SCREEN_BASE
+    print(fmt_screen(mon.mem_get(base, base + SCREEN_SIZE - 1), lower))
+
+
+def cmd_label(mon, labels, args):
+    need(args, 1, "label TEXTE|ADDR")
+    if not labels.by_name:
+        raise DbgError("aucun fichier de labels (--labels, $C64_LABELS ou build/vice.labels)")
+    try:
+        addr = parse_int(args[0])
+    except ValueError:
+        found = labels.search(args[0])
+        if not found:
+            raise DbgError("aucun label contenant '%s'" % args[0])
+        for addr, name in found:
+            print("%s = $%04x" % (name, addr))
+        return
+    names = labels.by_addr.get(addr, [])
+    if not names:
+        raise DbgError("aucun label à $%04x" % addr)
+    for n in names:
+        print("%s = $%04x" % (n, addr))
+
+
+def cmd_info(mon, labels, args):
+    ver, rev = mon.vice_info()
+    print("VICE %s (rev %d)" % (ver, rev))
+
+
+def cmd_quit(mon, labels, args):
+    mon.quit()
+    mon.was_stopped = True  # plus rien à relancer
+    print("quit")
+
+
+def cmd_ping(mon, labels, args):
+    mon.ping()
+    print("pong")
+
+
+COMMANDS = {
+    "regs": cmd_regs, "mem": cmd_mem, "poke": cmd_poke, "break": cmd_break,
+    "watch": cmd_watch, "delete": cmd_delete, "list": cmd_list, "step": cmd_step,
+    "next": cmd_next, "cont": cmd_cont, "wait": cmd_wait, "status": cmd_status,
+    "reset": cmd_reset, "dump": cmd_dump, "screen": cmd_screen, "label": cmd_label,
+    "info": cmd_info, "quit": cmd_quit, "ping": cmd_ping,
+}
+OFFLINE = {"label"}            # sans VICE
+KEEP_STATE = {"cont", "quit"}  # ne pas relancer l'émulateur après coup
+
+
+def default_labels_path():
+    return os.environ.get("C64_LABELS", os.path.join(BUILD, "vice.labels"))
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        prog="dbg.py", description=__doc__.split("\n")[0],
+        epilog="Liste des commandes et syntaxe des adresses : en-tête de tools/dbg.py.")
+    ap.add_argument("--port", type=int, default=int(os.environ.get("C64_MONITOR_PORT", 6502)))
+    ap.add_argument("--labels", default=default_labels_path())
+    ap.add_argument("--timeout", type=float, default=5.0)
+    ap.add_argument("--sock", default=None, help="socket Unix du démon")
+    ap.add_argument("--daemon", action="store_true", help="mode démon (usage interne)")
+    ap.add_argument("command", nargs="?", choices=sorted(COMMANDS))
+    ap.add_argument("args", nargs="*")
+    opts = ap.parse_args(argv)
+
+    if opts.daemon:
+        os.makedirs(BUILD, exist_ok=True)
+        Daemon(opts.port, opts.sock or daemon_sock_path()).run()
+        return 0
+    if not opts.command:
+        ap.error("commande manquante")
+
+    labels = Labels(opts.labels)
+    handler = COMMANDS[opts.command]
+    mon = None
+    try:
+        if opts.command in OFFLINE:
+            handler(None, labels, opts.args)
+            return 0
+        mon = Monitor(opts.port, opts.timeout, opts.sock)
+        try:
+            handler(mon, labels, opts.args)
+        finally:
+            # Remet l'émulateur dans l'état trouvé : s'il tournait, il repart.
+            if opts.command not in KEEP_STATE and mon.touched_vice and not mon.was_stopped:
+                try:
+                    mon.exit_monitor()
+                except DbgError:
+                    pass
+        return 0
+    except DbgError as e:
+        print("dbg.py: %s" % e, file=sys.stderr)
+        return e.exit_code
+    except (ValueError, struct.error) as e:
+        print("dbg.py: argument invalide : %s" % e, file=sys.stderr)
+        return 1
+    except OSError as e:
+        print("dbg.py: erreur d'E/S : %s" % e, file=sys.stderr)
+        return 2
+    finally:
+        if mon is not None:
+            mon.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

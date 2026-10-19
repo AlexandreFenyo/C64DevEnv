@@ -1,0 +1,21 @@
+# Artefacts de build
+build/
+*.o
+*.prg
+*.lbl
+*.map
+*.labels
+
+# VICE
+vice.pid
+*.vsf
+
+# Python
+__pycache__/
+*.pyc
+
+# Éditeurs
+*~
+*.swp
+.vscode/
+.idea/
