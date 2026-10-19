@@ -42,7 +42,7 @@ Les labels de `build/<prog>.labels` sont chargés dans VICE et utilisables par n
 ## Arborescence
 
 - `src/` : vos programmes (un sous-répertoire par programme, `.s` et/ou `.c`)
-- `examples/` : `hello` (ca65) et `hello_c` (cc65)
+- `examples/` : `hello` (ca65, boucle infinie pour les tests), `hello_rts` (ca65, rend la main au BASIC : idéal pour `make run` et taper des commandes), `hello_c` (cc65)
 - `tools/` : `install.sh`, `run.sh`, `stop.sh`, `dbg.py`, `mklabels.py`
 - `tests/` : tests lancés par `make test`
 - `build/` : artefacts générés (ignoré par git)

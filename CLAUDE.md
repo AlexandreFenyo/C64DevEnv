@@ -24,6 +24,8 @@ make clean
 tools/stop.sh [--all]            # arrête VICE (et le démon dbg.py) ; --all tue aussi les orphelins
 ```
 
+Exemples : `hello` (boucle infinie `loop: jmp loop`, utilisé par les tests de point d'arrêt ; le clavier ne répond pas, normal), `hello_rts` (même affichage puis `rts` : retour au `READY.`, l'utilisateur peut taper ; à préférer pour `make run`), `hello_c` (cc65, printf).
+
 Un programme = un sous-répertoire de `src/` ou `examples/` (fichiers `.s` ca65 et/ou `.c`), ou un fichier isolé `src/foo.s` / `src/foo.c`. Nom du programme = nom du répertoire/fichier. Asm pur : lié avec `c64-asm.cfg -u __EXEHDR__` (en-tête BASIC `SYS 2061`, code en `$080D`, mettre le point d'entrée en premier dans `.segment "CODE"`). Dès qu'il y a un `.c` : `c64.cfg` + runtime cc65. Compilation avec `-g` pour que les labels locaux apparaissent dans `build/<prog>.labels` (format VICE `al C:080d .start`, généré par `tools/mklabels.py` depuis `ld65 -Ln`).
 
 Piège cc65 : les chaînes sont converties ASCII→PETSCII ; écrire le texte **en minuscules** dans le source pour qu'il s'affiche en majuscules avec le jeu de caractères par défaut du C64 (des majuscules dans le source donnent des symboles graphiques).
