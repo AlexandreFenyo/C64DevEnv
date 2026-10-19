@@ -35,12 +35,19 @@ tools/run.sh --headless --warp --cycles 5000000 --screenshot build/hello.png bui
 
 ## Portail de développement (navigateur)
 
+**URL : http://localhost:8064**, à ouvrir dans le navigateur Windows (ou `http://127.0.0.1:8064` depuis Ubuntu).
+
+Sur ce poste, le portail est installé comme service : il démarre tout seul à chaque ouverture d'Ubuntu, il suffit d'ouvrir l'URL. Pour le démarrer ou le gérer à la main (depuis `~/C64DevEnv`) :
+
 ```bash
-make portal               # démarre le portail : ouvrir http://localhost:8064 dans le navigateur Windows
-tools/portal.sh install   # ou : service permanent, démarré à chaque ouverture d'Ubuntu (uninstall pour l'enlever)
+tools/portal.sh status    # en service ? affiche l'URL
+tools/portal.sh start     # démarre le portail (équivalent : make portal)
+tools/portal.sh stop      # l'arrête (équivalent : make portal-stop)
+tools/portal.sh restart   # après une modification de tools/portal.py
+tools/portal.sh install   # l'installe en service permanent (uninstall pour l'enlever)
 ```
 
-Depuis la page : compiler, lancer un programme (visible ou invisible, avec ou sans moniteur, warp), faire une capture d'écran, lire les sources, lancer les tests, et déboguer avec l'image du C64 en direct, les registres, pause/pas à pas/continuer, les points d'arrêt, la mémoire et les labels. Le portail appelle les mêmes outils que la ligne de commande ; `tools/portal.sh status|restart|logs` pour l'administrer.
+Depuis la page : compiler, lancer un programme (visible ou invisible, avec ou sans moniteur, warp), faire une capture d'écran, lire les sources, lancer les tests, et déboguer avec l'image du C64 en direct, les registres, pause/pas à pas/continuer, les points d'arrêt, la mémoire et les labels. Le portail appelle les mêmes outils que la ligne de commande.
 
 ## Déboguer
 
