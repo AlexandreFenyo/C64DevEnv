@@ -1048,11 +1048,12 @@ class Session:
                 self.frames = self.compute_frames()
         scopes = []
         if frame == 0:
-            scopes.append({"name": "Registres", "presentationHint": "registers",
-                           "variablesReference": self.new_ref(self.vars_registers), "expensive": False})
+            # VS Code déplie le premier groupe : les locales en C, sinon les registres.
             if self.prog.is_c and self.frames and self.prog.info.function_at(self.frames[0]["pc"]):
                 scopes.append({"name": "Locales", "presentationHint": "locals",
                                "variablesReference": self.new_ref(self.vars_locals), "expensive": False})
+            scopes.append({"name": "Registres", "presentationHint": "registers",
+                           "variablesReference": self.new_ref(self.vars_registers), "expensive": False})
         scopes.append({"name": "Globales" if self.prog.is_c else "Données du programme",
                        "variablesReference": self.new_ref(self.vars_globals), "expensive": False})
         scopes.append({"name": "Pile 6502", "variablesReference": self.new_ref(self.vars_stack),
