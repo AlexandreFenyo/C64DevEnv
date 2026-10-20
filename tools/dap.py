@@ -138,6 +138,14 @@ def c_type_of(path, name, before_line=None):
     return text, size, signed, pointer, count
 
 
+COLOR_NAMES = ("noir", "blanc", "rouge", "cyan", "violet", "vert", "bleu", "jaune", "orange", "marron",
+               "rose", "gris foncé", "gris", "vert clair", "bleu clair", "gris clair")
+
+
+def color_name(value):
+    return "%d %s" % (value & 15, COLOR_NAMES[value & 15])
+
+
 def fmt_scalar(data, signed):
     v = int.from_bytes(data, "little")
     if signed and data and data[-1] & 0x80:
@@ -288,6 +296,7 @@ class Session:
         self.entry_cp = None
         self.done = False
         self.stop_on_entry = False
+        self.io_bank = None
 
     # --- E/S DAP ---------------------------------------------------------
     def send(self, msg):
@@ -508,6 +517,13 @@ class Session:
 
     def mem(self, start, end):
         return self.mon.mem_get(max(0, start), min(0xFFFF, end))
+
+    def io(self, start, end):
+        """Registres des puces lus dans la banque « io » de VICE : sans effet
+        de bord, et visibles même si le programme a masqué les E/S ($01)."""
+        if self.io_bank is None:
+            self.io_bank = self.mon.bank_id("io")
+        return self.mon.mem_get(start, end, self.io_bank)
 
     def g_run_to(self, addrs, sp_min=None):
         """Relance VICE jusqu'à l'une des adresses (points d'arrêt à nous).
@@ -1060,6 +1076,12 @@ class Session:
                        "expensive": False})
         scopes.append({"name": "Écran ($0400)", "variablesReference": self.new_ref(self.vars_screen),
                        "expensive": True})
+        # État des puces : groupes repliés, lus seulement à l'ouverture.
+        for name, fn in (("Mémoire ($01, vecteurs)", self.vars_memconfig),
+                         ("VIC-II ($D000)", self.vars_vic), ("Sprites", self.vars_sprites),
+                         ("SID ($D400)", self.vars_sid), ("CIA 1 ($DC00)", lambda: self.vars_cia(0xDC00)),
+                         ("CIA 2 ($DD00)", lambda: self.vars_cia(0xDD00))):
+            scopes.append({"name": name, "variablesReference": self.new_ref(fn), "expensive": True})
         return {"scopes": scopes}
 
     def req_variables(self, args, req):
@@ -1230,6 +1252,157 @@ class Session:
         return [{"name": "%02d" % row, "addr": dbg.SCREEN_BASE + 40 * row,
                  "value": "|%s|" % "".join(dbg.screen_code_to_char(c) for c in data[row * 40:row * 40 + 40])}
                 for row in range(25)]
+
+    # --- état des puces du C64 ------------------------------------------
+    def raw_regs(self, base, data, names):
+        """Registres bruts, modifiables (écriture dans la vue processeur)."""
+        return [{"name": "$%04x %s" % (base + i, names[i] if i < len(names) else ""), "addr": base + i,
+                 "value": "$%02x  %%%s" % (b, format(b, "08b")), "set": ("mem", base + i, 1)}
+                for i, b in enumerate(data)]
+
+    def vic_bank(self):
+        return (3 - (self.io(0xDD00, 0xDD00)[0] & 3)) * 0x4000
+
+    def vars_memconfig(self):
+        r = self.regs()
+        port = r.get("01", self.mem(1, 1)[0])
+        lo, hi, ch = port & 1, port & 2, port & 4
+        basic = "ROM" if lo and hi else "RAM"
+        kernal = "ROM" if hi else "RAM"
+        if not (lo or hi):
+            dxxx = "RAM"
+        else:
+            dxxx = "E/S" if ch else "ROM de caractères"
+        out = [{"name": "$01 (port 6510)", "value": "$%02x  %%%s" % (port, format(port, "08b")), "addr": 1,
+                "set": ("mem", 1, 1)},
+               {"name": "$A000-$BFFF", "value": "BASIC " + basic if basic == "ROM" else "RAM"},
+               {"name": "$D000-$DFFF", "value": dxxx},
+               {"name": "$E000-$FFFF", "value": "KERNAL " + kernal if kernal == "ROM" else "RAM"},
+               {"name": "banque VIC", "value": "$%04x-$%04x (CIA 2, $DD00)" % (self.vic_bank(), self.vic_bank() + 0x3FFF)}]
+        vec = self.mem(0x0314, 0x0319)
+        for i, n in enumerate(("IRQ ($0314)", "BRK ($0316)", "NMI ($0318)")):
+            a = vec[2 * i] | (vec[2 * i + 1] << 8)
+            label = self.prog.labels.name_of(a)
+            out.append({"name": "vecteur " + n, "addr": 0x0314 + 2 * i,
+                        "value": "$%04x%s" % (a, " (%s)" % label if label else
+                                              " (KERNAL)" if a in (0xEA31, 0xFE66, 0xFE47) else ""),
+                        "set": ("mem", 0x0314 + 2 * i, 2)})
+        return out
+
+    def vars_vic(self):
+        v = self.io(0xD000, 0xD02E)
+        d011, d016, d018 = v[0x11], v[0x16], v[0x18]
+        bank = self.vic_bank()
+        ecm, bmm, mcm = d011 & 0x40, d011 & 0x20, d016 & 0x10
+        mode = {(0, 0, 0): "texte standard", (0, 0, 1): "texte multicolore", (0, 1, 0): "bitmap haute résolution",
+                (0, 1, 1): "bitmap multicolore", (1, 0, 0): "texte couleur de fond étendue (ECM)"}.get(
+                    (bool(ecm), bool(bmm), bool(mcm)), "mode invalide (écran noir)")
+        screen = bank + (d018 >> 4) * 0x400
+        chars = bank + ((d018 >> 1) & 7) * 0x800
+        raster = v[0x12] | ((d011 & 0x80) << 1)
+        line = self.regs().get("LIN")
+        names = ["M%dX" % (i // 2) if i % 2 == 0 else "M%dY" % (i // 2) for i in range(16)] + [
+            "MSBX", "CTRL1", "RASTER", "LPX", "LPY", "SPR_ENA", "CTRL2", "SPR_EXPY", "MEMPTR", "IRQ",
+            "IRQ_MASK", "SPR_PRI", "SPR_MCOL", "SPR_EXPX", "SPR-SPR", "SPR-FOND", "BORDURE", "FOND0",
+            "FOND1", "FOND2", "FOND3", "SPR_MC0", "SPR_MC1"] + ["SPR%d_COL" % i for i in range(8)]
+        out = [{"name": "mode", "value": mode},
+               {"name": "écran affiché", "value": "oui" if d011 & 0x10 else "non (DEN=0, bordure seule)"},
+               {"name": "mémoire écran", "value": "$%04x" % screen, "addr": screen},
+               {"name": "bitmap" if bmm else "jeu de caractères",
+                "value": "$%04x%s" % ((bank + (0x2000 if d018 & 8 else 0)) if bmm else chars,
+                                       " (ROM de caractères)" if not bmm and bank in (0, 0x8000)
+                                       and chars - bank in (0x1000, 0x1800) else ""),
+                "addr": (bank + (0x2000 if d018 & 8 else 0)) if bmm else chars},
+               {"name": "bordure ($D020)", "value": color_name(v[0x20]), "addr": 0xD020},
+               {"name": "fond ($D021)", "value": color_name(v[0x21]), "addr": 0xD021},
+               {"name": "ligne raster", "value": "%d%s" % (line if line is not None else raster,
+                                                           ", cycle %d" % self.regs().get("CYC", 0) if line is not None else "")},
+               {"name": "interruption raster sur la ligne", "value": "%d (%s)" % (
+                   raster, "activée" if v[0x1A] & 1 else "désactivée")},
+               {"name": "défilement", "value": "X=%d Y=%d" % (d016 & 7, d011 & 7)},
+               {"name": "format", "value": "%d colonnes, %d lignes" % (40 if d016 & 8 else 38, 25 if d011 & 8 else 24)},
+               {"name": "IRQ en attente / masque", "value": "$%02x / $%02x" % (v[0x19] & 0x8F, v[0x1A] & 0x0F)},
+               {"name": "sprites actifs", "value": ", ".join(str(i) for i in range(8) if v[0x15] >> i & 1) or "aucun"}]
+        raw = self.raw_regs(0xD000, v, names)
+        out.append({"name": "registres bruts", "value": "$D000-$D02E", "ref": self.new_ref(lambda: raw)})
+        return out
+
+    def vars_sprites(self):
+        v = self.io(0xD000, 0xD02E)
+        screen = self.vic_bank() + (v[0x18] >> 4) * 0x400
+        ptrs = self.mem(screen + 0x3F8, screen + 0x3FF)
+        out = []
+        for i in range(8):
+            bit = 1 << i
+            x = v[2 * i] | (0x100 if v[0x10] & bit else 0)
+            data = self.vic_bank() + ptrs[i] * 64
+            props = [{"name": "actif", "value": "oui" if v[0x15] & bit else "non"},
+                     {"name": "position", "value": "x=%d y=%d" % (x, v[2 * i + 1])},
+                     {"name": "couleur", "value": color_name(v[0x27 + i])},
+                     {"name": "multicolore", "value": "oui (%s, %s)" % (color_name(v[0x25]), color_name(v[0x26]))
+                      if v[0x1C] & bit else "non"},
+                     {"name": "agrandi", "value": "%s%s" % ("X " if v[0x1D] & bit else "", "Y" if v[0x17] & bit else "")
+                      or "non"},
+                     {"name": "derrière le texte", "value": "oui" if v[0x1B] & bit else "non"},
+                     {"name": "pointeur ($%04x)" % (screen + 0x3F8 + i), "value": "%d -> données en $%04x" % (ptrs[i], data),
+                      "addr": data},
+                     {"name": "collisions", "value": "sprite-sprite %s, sprite-fond %s" % (
+                         "oui" if v[0x1E] & bit else "non", "oui" if v[0x1F] & bit else "non")}]
+            out.append({"name": "sprite %d" % i,
+                        "value": ("x=%d y=%d %s" % (x, v[2 * i + 1], color_name(v[0x27 + i]))) if v[0x15] & bit else "inactif",
+                        "ref": self.new_ref(lambda p=props: p)})
+        return out
+
+    def vars_sid(self):
+        v = self.io(0xD400, 0xD41C)
+        out = []
+        for n in range(3):
+            b = 7 * n
+            freq = v[b] | (v[b + 1] << 8)
+            pw = (v[b + 2] | (v[b + 3] << 8)) & 0x0FFF
+            ctrl = v[b + 4]
+            waves = [w for bit, w in ((0x10, "triangle"), (0x20, "dent de scie"), (0x40, "carrée"), (0x80, "bruit"))
+                     if ctrl & bit] or ["aucune"]
+            hz = freq * 985248 / 16777216
+            props = [{"name": "fréquence", "value": "$%04x = %.1f Hz (PAL)" % (freq, hz)},
+                     {"name": "forme d'onde", "value": "+".join(waves) + (" (largeur %.0f %%)" % (pw / 40.95) if ctrl & 0x40 else "")},
+                     {"name": "gate", "value": "ouvert (note jouée)" if ctrl & 1 else "fermé (relâchement)"},
+                     {"name": "sync / modulation en anneau", "value": "%s / %s" % ("oui" if ctrl & 2 else "non", "oui" if ctrl & 4 else "non")},
+                     {"name": "ADSR", "value": "A=%d D=%d S=%d R=%d" % (v[b + 5] >> 4, v[b + 5] & 15, v[b + 6] >> 4, v[b + 6] & 15)}]
+            out.append({"name": "voix %d ($%04x)" % (n + 1, 0xD400 + b),
+                        "value": "%s, %.0f Hz, %s" % ("+".join(waves), hz, "gate ouvert" if ctrl & 1 else "gate fermé"),
+                        "ref": self.new_ref(lambda p=props: p)})
+        filt = (v[0x15] & 7) | (v[0x16] << 3)
+        out.append({"name": "volume", "value": "%d/15" % (v[0x18] & 15)})
+        out.append({"name": "filtre", "value": "coupure %d, résonance %d, voix %s, %s" % (
+            filt, v[0x17] >> 4, ",".join(str(i + 1) for i in range(3) if v[0x17] >> i & 1) or "aucune",
+            "+".join(t for bit, t in ((0x10, "passe-bas"), (0x20, "passe-bande"), (0x40, "passe-haut")) if v[0x18] & bit)
+            or "aucun type")})
+        out.append({"name": "note", "value": "registres en écriture seule sur un vrai C64 : VICE montre la dernière valeur écrite"})
+        raw = self.raw_regs(0xD400, v, [])
+        out.append({"name": "registres bruts", "value": "$D400-$D41C", "ref": self.new_ref(lambda: raw)})
+        return out
+
+    def vars_cia(self, base):
+        v = self.io(base, base + 0x0F)
+        ta, tb = v[4] | (v[5] << 8), v[6] | (v[7] << 8)
+        out = []
+        if base == 0xDC00:
+            out.append({"name": "rôle", "value": "clavier (port A = colonnes, port B = lignes), joysticks, IRQ du KERNAL (timer A, 60 Hz)"})
+        else:
+            out.append({"name": "rôle", "value": "banque VIC (port A bits 0-1), port série, NMI"})
+            out.append({"name": "banque VIC", "value": "$%04x" % self.vic_bank()})
+        out += [{"name": "port A / sens", "value": "$%02x / $%02x" % (v[0], v[2])},
+                {"name": "port B / sens", "value": "$%02x / $%02x" % (v[1], v[3])},
+                {"name": "timer A", "value": "%d (%s, %s)" % (ta, "en marche" if v[0x0E] & 1 else "arrêté",
+                                                           "une fois" if v[0x0E] & 8 else "continu")},
+                {"name": "timer B", "value": "%d (%s)" % (tb, "en marche" if v[0x0F] & 1 else "arrêté")},
+                {"name": "horloge TOD", "value": "%x:%02x:%02x.%x" % (v[0x0B] & 0x1F, v[0x0A], v[0x09], v[0x08] & 0x0F)},
+                {"name": "interruptions (ICR)", "value": "$%02x" % v[0x0D]}]
+        raw = self.raw_regs(base, v, ["PRA", "PRB", "DDRA", "DDRB", "TA_LO", "TA_HI", "TB_LO", "TB_HI",
+                                       "TOD_10", "TOD_SEC", "TOD_MIN", "TOD_HR", "SDR", "ICR", "CRA", "CRB"])
+        out.append({"name": "registres bruts", "value": "$%04x-$%04x" % (base, base + 15), "ref": self.new_ref(lambda: raw)})
+        return out
 
     def req_setVariable(self, args, req):
         ref, name, value = int(args["variablesReference"]), args["name"], args["value"].strip()

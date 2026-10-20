@@ -191,6 +191,28 @@ def scenario_asm():
           "données : message = %s" % data.get("message", {}).get("value"))
     hv = c.evaluate("message", "hover")
     check("$0832" in hv and "$48" in hv, "survol de message : %s" % hv)
+    # État des puces : VIC-II (bordure verte posée par le programme), mémoire,
+    # sprites, SID, CIA ; modification d'un registre brut.
+    vic, _ = c.variables("VIC-II")
+    check(vic["bordure ($D020)"]["value"] == "5 vert" and vic["mode"]["value"] == "texte standard"
+          and vic["mémoire écran"]["value"] == "$0400", "VIC-II : bordure %s, mode %s, écran %s"
+          % (vic["bordure ($D020)"]["value"], vic["mode"]["value"], vic["mémoire écran"]["value"]))
+    raw = {v["name"].split()[0]: v for v in c.body("variables", {"variablesReference": vic["registres bruts"]["variablesReference"]})["variables"]}
+    r = c.body("setVariable", {"variablesReference": vic["registres bruts"]["variablesReference"],
+                               "name": raw["$d020"]["name"], "value": "$02"})
+    vic, _ = c.variables("VIC-II")
+    check(vic["bordure ($D020)"]["value"] == "2 rouge", "VIC-II : bordure modifiée -> %s" % vic["bordure ($D020)"]["value"])
+    memc, _ = c.variables("Mémoire")
+    check(memc["$D000-$DFFF"]["value"] == "E/S" and memc["$E000-$FFFF"]["value"] == "KERNAL ROM"
+          and "$ea31" in memc["vecteur IRQ ($0314)"]["value"], "configuration mémoire : %s / %s / %s"
+          % (memc["$D000-$DFFF"]["value"], memc["$E000-$FFFF"]["value"], memc["vecteur IRQ ($0314)"]["value"]))
+    spr, _ = c.variables("Sprites")
+    check(len(spr) == 8 and spr["sprite 0"]["value"] == "inactif", "sprites : 8, sprite 0 %s" % spr["sprite 0"]["value"])
+    c.body("writeMemory", {"memoryReference": "0xd418", "data": base64.b64encode(b"\x0f").decode()})
+    sid, _ = c.variables("SID")
+    check(sid["volume"]["value"] == "15/15", "SID : volume écrit à 15 relu %s" % sid["volume"]["value"])
+    cia, _ = c.variables("CIA 1")
+    check("en marche" in cia["timer A"]["value"], "CIA 1 : timer A de l'IRQ KERNAL %s" % cia["timer A"]["value"])
     hv = c.evaluate("CHROUT", "hover")
     check("$ffd2" in hv, "survol d'une équivalence : %s" % hv)
     out = c.evaluate("regs")
