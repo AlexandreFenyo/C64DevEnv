@@ -1,0 +1,19 @@
+{
+  // IntelliSense C (extension ms-vscode.cpptools) pour cc65 : en-têtes de
+  // cc65, pas ceux de gcc ; mots-clés propres à cc65 neutralisés.
+  "configurations": [
+    {
+      "name": "cc65 (C64)",
+      "includePath": ["${workspaceFolder}/**", "/usr/share/cc65/include"],
+      "defines": [
+        "__CC65__=0x0219", "__C64__=1", "__CBM__=1", "__CC65_STD__=1",
+        "__fastcall__=", "__cdecl__=", "__near__=", "__far__=", "__inline__=inline",
+        "__asm__(x)=", "__AX__=0", "__A__=0", "__X__=0", "__EAX__=0"
+      ],
+      "compilerPath": "",
+      "cStandard": "c99",
+      "intelliSenseMode": "linux-gcc-x64"
+    }
+  ],
+  "version": 4
+}

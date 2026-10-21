@@ -1,0 +1,14 @@
+{
+  // Profil VS Code « C64 ». L'extension du dépôt, c64devenv.c64-vice
+  // (débogage + langage ca65), n'est pas sur le Marketplace : make vscode.
+  "recommendations": [
+    "ms-vscode.cpptools",
+    "ms-vscode.hexeditor"
+  ],
+  // Débogueurs C64 du Marketplace évalués le 2026-10-21 : en conflit avec
+  // c64devenv.c64-vice (langage ca65, débogage) et moins complets en C.
+  "unwantedRecommendations": [
+    "rosc.vs64",
+    "entan-gl.cc65-vice"
+  ]
+}

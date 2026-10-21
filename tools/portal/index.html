@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Portail C64</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2340318d'/%3E%3Crect x='5' y='7' width='22' height='18' rx='2' fill='%237869c4'/%3E%3Crect x='8' y='11' width='10' height='2' fill='%23fff'/%3E%3Crect x='8' y='15' width='14' height='2' fill='%23fff'/%3E%3Crect x='8' y='19' width='3' height='3' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap">
 <link rel="stylesheet" href="/static/portal.css">
 </head>
 <body>
@@ -12,10 +15,18 @@
   <div class="brand">
     <span class="logo" aria-hidden="true">C64</span>
     <div>
-      <h1>Portail de développement</h1>
+      <h1>Portail de développement C64</h1>
       <div class="sub" id="git">&nbsp;</div>
     </div>
   </div>
+  <nav class="nav" aria-label="Sections">
+    <a href="#card-programs">Programmes</a>
+    <a href="#card-ops">Opérations</a>
+    <a href="#card-monitor">Moniteur</a>
+    <a href="#card-memory">Mémoire</a>
+    <a href="#card-logs">Journaux</a>
+    <a href="#card-sync">Cohérence</a>
+  </nav>
   <div class="chips" id="chips">
     <span class="chip" id="chip-vice" title="Instance VICE interactive (build/vice.pid)">VICE : …</span>
     <span class="chip" id="chip-monitor" title="Moniteur binaire (dbg.py status)">Moniteur : …</span>
@@ -29,7 +40,7 @@
 <main class="layout">
   <section class="card" id="card-programs">
     <div class="card-head">
-      <h2>Programmes</h2>
+      <h2><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M12 15h5"/></svg>Programmes</h2>
       <button class="btn" data-action="build" title="make">Compiler</button>
     </div>
     <div class="options">
@@ -62,7 +73,7 @@
   </section>
 
   <section class="card" id="card-ops">
-    <div class="card-head"><h2>Opérations</h2></div>
+    <div class="card-head"><h2><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3M12 18v3M4.2 7.5l2.6 1.5M17.2 15l2.6 1.5M4.2 16.5l2.6-1.5M17.2 9l2.6-1.5"/><circle cx="12" cy="12" r="3.5"/></svg>Opérations</h2></div>
     <div class="button-row">
       <button class="btn" data-action="test">Tous les tests</button>
       <select id="test-select" aria-label="Test unique"></select>
@@ -87,7 +98,7 @@
 
   <section class="card span-2" id="card-monitor">
     <div class="card-head">
-      <h2>Moniteur</h2>
+      <h2><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4M6 12l3-3 3 3 3-4 3 4"/></svg>Moniteur</h2>
       <span class="muted" id="monitor-hint">Lancez un programme avec la case « Moniteur ».</span>
     </div>
     <div class="monitor">
@@ -185,7 +196,7 @@
 
   <section class="card span-2" id="card-memory">
     <div class="card-head">
-      <h2>Mémoire</h2>
+      <h2><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="6" width="16" height="12" rx="1.5"/><path d="M8 6V3M12 6V3M16 6V3M8 21v-3M12 21v-3M16 21v-3M8 10h8v4H8z"/></svg>Mémoire</h2>
       <span class="muted" id="mem-hint">Nécessite un programme lancé avec le moniteur.</span>
     </div>
     <div class="options">
@@ -253,7 +264,7 @@
 
   <section class="card" id="card-logs">
     <div class="card-head">
-      <h2>Journaux</h2>
+      <h2><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 12h7M9 16h7"/></svg>Journaux</h2>
       <select id="log-select" aria-label="Journal"></select>
       <button class="btn small ghost" id="log-refresh">Rafraîchir</button>
     </div>
@@ -262,13 +273,17 @@
 
   <section class="card" id="card-sync">
     <div class="card-head">
-      <h2>Cohérence outils ↔ portail</h2>
+      <h2><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg>Cohérence outils ↔ portail</h2>
       <button class="btn small ghost" id="sync-refresh">Revérifier</button>
     </div>
     <div id="sync-summary"></div>
     <div id="sync-details" class="sync-details"></div>
   </section>
 </main>
+<footer class="footer">
+  <span>C64DevEnv · cc65 + VICE x64sc · <code>~/C64DevEnv</code></span>
+  <span>Ligne de commande : <code>tools/dbg.py</code> · VS Code : <code>make code</code></span>
+</footer>
 
 <script src="/static/portal.js"></script>
 </body>
