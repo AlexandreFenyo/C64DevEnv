@@ -117,10 +117,13 @@ else
     "$ROOT/tools/stop.sh" --quiet || true
 fi
 
+# Réglages par défaut de VICE (le vicerc de l'utilisateur est ignoré), plus
+# ceux de tools/vice/joystick.ini : joystick 2 au clavier (flèches + espace).
+VICE_CONF=(-default -addconfig "$ROOT/tools/vice/joystick.ini")
 if [ "$LOAD_ONLY" = 1 ]; then
-    ARGS=(-default -autostartprgmode 1 -autoload "$PRG")
+    ARGS=("${VICE_CONF[@]}" -autostartprgmode 1 -autoload "$PRG")
 else
-    ARGS=(-default -autostartprgmode 1 -autostart "$PRG")
+    ARGS=("${VICE_CONF[@]}" -autostartprgmode 1 -autostart "$PRG")
 fi
 # Options supplémentaires passées telles quelles à x64sc (ex. VICE_EXTRA_ARGS="-ntsc").
 # shellcheck disable=SC2206

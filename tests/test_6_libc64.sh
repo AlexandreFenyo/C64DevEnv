@@ -134,6 +134,26 @@ python3 tools/mkworld.py --check libc64/world/world.txt libc64/tileset/tileset.t
     libc64/include/world.h libc64/include/world_defs.inc 2>/dev/null || fail "monde : fichiers générés pas à jour (make)"
 tools/run.sh --headless --warp --monitor build/monde.prg >/dev/null || fail "run.sh monde"
 python3 tests/world_test.py || fail "monde"
+# Joystick 2 au clavier (tools/vice/joystick.ini, chargé par run.sh) :
+# ressources de VICE relues par le moniteur (commande « resource get »).
+joy=$(python3 - <<'PY'
+import sys
+sys.path.insert(0, "tools")
+import dbg
+m = dbg.Monitor(6502, 5)
+try:
+    out = []
+    for name in ("JoyDevice2", "KeySetEnable", "KeySet1North", "KeySet1South", "KeySet1West", "KeySet1East", "KeySet1Fire"):
+        b = m.call(0x51, bytes([len(name)]) + name.encode()).body
+        out.append(str(int.from_bytes(b[2:2 + b[1]], "little")))
+    print(" ".join(out))
+finally:
+    m.exit_monitor()
+    m.close()
+PY
+)
+[ "$joy" = "2 1 65362 65364 65361 65363 32" ] || fail "joystick 2 au clavier : ressources VICE $joy"
+echo "ok : joystick 2 au clavier (flèches + espace) configuré dans VICE"
 tools/stop.sh --quiet
 
 # demo2 : début de bande retardé par des NOP jusqu'au bord de l'écran : bord

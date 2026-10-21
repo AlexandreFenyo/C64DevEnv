@@ -93,6 +93,7 @@ Pour déboguer une instance lancée par `make debug PROG=xxx` ou par le portail 
 
 - `libc64/` : fonctions réutilisables en C et en assembleur (écran, sprites, manette, son, temps, hasard, interruptions, lignes raster, tileset du jeu, monde du jeu), une par fichier. `#include "libc64.h"` suffit : un programme n'embarque que les fonctions qu'il appelle. Détails et liste : `libc64/README.md`.
 - `mygame/` : les versions du jeu, une par sous-répertoire : `mygame/demo` (`make run PROG=demo`, ou `F5` dans VS Code sur `mygame/demo/main.c`), `mygame/demo2` (bande de couleur au bord net), `mygame/monde` (promenade dans le monde 400 x 150 avec défilement au pixel, flèches ou manette, tir = plus vite).
+- Dans VICE (lancé par `tools/run.sh`, `make run`, le portail ou VS Code), le **joystick du port 2 est au clavier** : flèches = directions, espace = tir (`tools/vice/joystick.ini`). Ces touches ne tapent donc plus dans le C64 (au `READY.`, pas d'espace ni de flèches).
 
 ## Arborescence
 
