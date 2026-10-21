@@ -13,6 +13,7 @@
 .import _irq_init, _irq_done, _irq_register, _irq_unregister, _irq_vic_flags
 .import _raster_register, _raster_unregister
 .import _tileset_install, _tileset_done, _tile_put, _tile_put_color, _tile_fill, _tile_color
-.import _world_draw, _world_tile
+.import _world_draw, _world_tile, _world_scroll_init, _world_scroll_done, _world_scroll_work
+.import _panel_init, _panel_done, _panel_print, _panel_clear
 
 .include "libc64_defs.inc"

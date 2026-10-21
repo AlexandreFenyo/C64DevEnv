@@ -18,17 +18,18 @@
 ;      préparer (étape remise à 0, génération incrémentée) si elle change.
 
         .include "world_defs.inc"
+        .include "libc64_defs.inc"
 
         .export _world_scroll_irq, _ws_apply_fine
         .export _world_px, _world_py, _world_scroll_dx, _world_scroll_dy
         .export _world_scroll_stalls, _world_scroll_frames, _world_scroll_bumps, _world_scroll_front
         .export _ws_cur_tx, _ws_cur_ty, _ws_back_tx, _ws_back_ty, _ws_back_step, _ws_gen
-        .export _ws_front_colors, _ws_back_colors
+        .export _ws_front_colors, _ws_back_colors, _ws_bg
         .import _world_color_copy
         .importzp tmp1, tmp2
 
 MAX_PX    = WORLD_W * 8 - 304   ; = WORLD_SCROLL_MAX_PX (libc64.h)
-MAX_PY    = WORLD_H * 8 - 192
+MAX_PY    = WORLD_H * 8 - WORLD_SCROLL_VIEW_H
 MAX_TX    = MAX_PX >> 3         ; case de la colonne 0 au plus
 MAX_TY    = MAX_PY >> 3
 STEP_DONE = 3                   ; étapes de world_scroll_work (world_scroll.c)
@@ -36,6 +37,7 @@ STEP_DONE = 3                   ; étapes de world_scroll_work (world_scroll.c)
 VIC_CTRL1 = $D011
 VIC_CTRL2 = $D016
 VIC_ADDR  = $D018
+VIC_BG    = $D021
 
         .segment "DATA"
 
@@ -58,8 +60,9 @@ _ws_cur_ty:          .res 1
 _ws_back_ty:         .res 1
 _ws_back_step:       .res 1
 _ws_gen:             .res 1
-colors_a:            .res 1000
-colors_b:            .res 1000
+colors_a:            .res WORLD_SCROLL_ROWS * 40
+colors_b:            .res WORLD_SCROLL_ROWS * 40
+_ws_bg:              .res 1     ; couleur de fond des tiles ($D021), relevée à l'init
 edx:    .res 1                  ; résultat de plan
 edy:    .res 1
 mx:     .res 1                  ; 1 : l'axe fait partie du prochain franchissement
@@ -187,14 +190,9 @@ cross:  lda _ws_back_step       ; la vue préparée est-elle celle-là ?
         lda _ws_back_ty
         cmp nty
         bne stall
-        lda _world_scroll_front ; bascule (balayage vertical)
+        lda _world_scroll_front ; bascule (balayage vertical : $D018 dans setpos)
         eor #1
         sta _world_scroll_front
-        beq :+
-        lda #$12                ; écran $C400, motifs $C800
-        bne :++
-:       lda #$02                ; écran $C000, motifs $C800
-:       sta VIC_ADDR
         jsr setpos
         lda _ws_back_colors
         ldx _ws_back_colors+1
@@ -219,8 +217,9 @@ cross:  lda _ws_back_step       ; la vue préparée est-elle celle-là ?
         jmp predict
 
 stall:  inc _world_scroll_stalls        ; la position attend
-        bne predict
+        bne :+
         inc _world_scroll_stalls+1
+:       jsr _ws_apply_fine      ; registres du haut de l'écran (le panneau les change)
 
 predict:
         jsr plan
@@ -427,24 +426,27 @@ loop:   inx
 .endproc
         ; continue dans _ws_apply_fine
 
-; void ws_apply_fine(void) : $D016/$D011 selon (world_px, world_py), en 38
-; colonnes et 24 lignes ; bit 7 de $D011 (comparaison raster) à 0.
+; void ws_apply_fine(void) : registres du VIC-II pour le haut de l'écran,
+; écrits en entier à chaque image (le panneau, plus bas, les change) :
+; $D016 multicolore, 38 colonnes, décalage x ; $D011 écran allumé, 24
+; lignes, mode texte, décalage y, bit 7 (comparaison raster) à 0 ; $D018
+; écran affiché + motifs $C800 ; $D021 fond des tiles.
 .proc _ws_apply_fine
         lda _world_px
         and #7
-        eor #7
-        sta tmp1
-        lda VIC_CTRL2
-        and #$F0
-        ora tmp1
+        eor #$17                ; $10 | (7 - (px & 7))
         sta VIC_CTRL2
         lda _world_py
         and #7
-        eor #7
-        sta tmp1
-        lda VIC_CTRL1
-        and #$70
-        ora tmp1
+        eor #$17                ; $10 | (7 - (py & 7))
         sta VIC_CTRL1
+        lda _world_scroll_front
+        beq :+
+        lda #$12                ; écran $C400, motifs $C800
+        bne :++
+:       lda #$02                ; écran $C000, motifs $C800
+:       sta VIC_ADDR
+        lda _ws_bg
+        sta VIC_BG
         rts
 .endproc

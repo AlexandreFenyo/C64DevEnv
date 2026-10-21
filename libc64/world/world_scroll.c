@@ -1,8 +1,10 @@
 /* world_scroll.c - défilement fin (au pixel) du monde, double tampon.
 
    Affichage : le VIC-II décale l'image de 0 à 7 pixels ($D016 bits 0-2,
-   $D011 bits 0-2) ; en 38 colonnes et 24 lignes, les bords masquent les cases
-   partiellement visibles : la fenêtre visible fait 304 x 192 pixels.
+   $D011 bits 0-2) ; en 38 colonnes, les bords masquent les cases
+   partiellement visibles. La vue occupe le haut de l'écran : WORLD_SCROLL_ROWS
+   (16) lignes de caractères, 304 x 121 pixels visibles (lignes raster 55 à
+   175) ; en dessous, le panneau (libc64/panel) coupe l'image.
 
    Deux moitiés :
    - un handler raster en assembleur (world_scroll_irq.s, ligne 250, début du
@@ -14,7 +16,7 @@
    - le programme appelle world_scroll_work() en boucle : cette vue se
      prépare dans l'écran caché en trois étapes : copie décalée d'une case de
      l'écran affiché et de ses couleurs (world_copy2, ~23 000 cycles), puis
-     décodage de la seule ligne (40 cases) et/ou colonne (25 cases) qui
+     décodage de la seule ligne (40 cases) et/ou colonne (16 cases) qui
      apparaît. Une étape est abandonnée si la cible a changé pendant ce temps
      (ws_gen).
    Si la vue n'est pas prête au franchissement (départ à 1 pixel d'une case,
@@ -23,6 +25,7 @@
 #include <c64.h>
 #include "libc64.h"
 #include "world.h"
+#include "tiles.h"
 
 #define SCROLL_LINE 250                      /* ligne raster du handler */
 #define SEI() __asm__ ("sei")
@@ -45,6 +48,7 @@ extern unsigned int ws_cur_tx, ws_back_tx;   /* case affichée, vue en préparat
 extern unsigned char ws_cur_ty, ws_back_ty;
 extern unsigned char ws_back_step, ws_gen;   /* étape de préparation, génération de la cible */
 extern unsigned char *ws_front_colors, *ws_back_colors;
+extern unsigned char ws_bg;                  /* fond des tiles, rétabli à chaque image */
 
 unsigned char world_scroll_meter = WORLD_SCROLL_NO_METER;
 
@@ -72,10 +76,10 @@ void __fastcall__ world_scroll_init(unsigned int px, unsigned int py)
     wr_ty = ws_cur_ty;
     wr_screen = screen_of(0);
     wr_colors = ws_front_colors;
-    world_render_rows(0, 25);
+    world_render_rows(0, WORLD_SCROLL_ROWS);
     world_color_copy(ws_front_colors);
-    VIC.addr = 0x02;                         /* écran $C000, motifs $C800 */
-    ws_apply_fine();
+    ws_bg = TILESET_BG;
+    ws_apply_fine();                         /* écran $C000, motifs $C800, décalage fin */
     ws_back_tx = 0xFFFF;
     raster_register(SCROLL_LINE, world_scroll_irq);
 }
@@ -129,10 +133,10 @@ unsigned char world_scroll_work(void)
             wc_dst1 = bscr - off; wc_src1 = fscr;
             wc_dst2 = bcol - off; wc_src2 = fcol;
         }
-        world_copy2(1000 - (off >= 0 ? off : -off));
+        world_copy2(WORLD_SCROLL_ROWS * 40 - (off >= 0 ? off : -off));
     } else if (step == STEP_ROW) {
         if (sy) {
-            world_render_rows(sy > 0 ? 24 : 0, 1);
+            world_render_rows(sy > 0 ? WORLD_SCROLL_ROWS - 1 : 0, 1);
         }
     } else {
         if (sx) {

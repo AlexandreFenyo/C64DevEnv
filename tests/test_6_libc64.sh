@@ -15,7 +15,7 @@ fail() { echo "ECHEC : $*"; exit 1; }
 trap 'tools/stop.sh --quiet' EXIT
 
 make >/dev/null || fail "make"
-for c in IRQ_MAX_HANDLERS IRQ_SRC_CIA IRQ_SRC_VIC RASTER_MAX_HANDLERS RASTER_LEAD; do
+for c in IRQ_MAX_HANDLERS IRQ_SRC_CIA IRQ_SRC_VIC RASTER_MAX_HANDLERS RASTER_LEAD WORLD_SCROLL_ROWS WORLD_SCROLL_VIEW_H PANEL_ROW PANEL_ROWS; do
     h=$(awk -v c="$c" '$1 == "#define" && $2 == c { print $3 }' libc64/include/libc64.h)
     a=$(awk -v c="$c" '$1 == c && $2 == "=" { print $3 }' libc64/include/libc64_defs.inc)
     [ -n "$h" ] && [ $((h)) = $((${a/\$/0x})) ] || fail "constante $c : libc64.h=$h, libc64_defs.inc=$a"
@@ -129,11 +129,15 @@ echo "ok : tileset (données à jour, banque VIC 3, motifs en \$C800, Color RAM,
 tools/stop.sh --quiet
 
 # Monde : données compressées à jour, world_tile (libc64_test, plus haut),
-# promenade dans mygame/monde (vues comparées au monde, blocage aux bords).
+# promenade dans mygame/monde (vues comparées au monde, blocage aux bords),
+# panneau du bas de l'écran.
 python3 tools/mkworld.py --check libc64/world/world.txt libc64/tileset/tileset.txt libc64/world/world_data.s \
     libc64/include/world.h libc64/include/world_defs.inc 2>/dev/null || fail "monde : fichiers générés pas à jour (make)"
 tools/run.sh --headless --warp --monitor build/monde.prg >/dev/null || fail "run.sh monde"
 python3 tests/world_test.py || fail "monde"
+# Coupure vue qui défile / panneau (libc64/panel) : bande noire, panneau fixe,
+# vue continue jusqu'à sa dernière ligne, pour les 8 décalages verticaux.
+python3 tests/panel_test.py || fail "panneau"
 # Joystick 2 au clavier (tools/vice/joystick.ini, chargé par run.sh) :
 # ressources de VICE relues par le moniteur (commande « resource get »).
 joy=$(python3 - <<'PY'

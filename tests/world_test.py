@@ -6,12 +6,14 @@ par les globales de mygame/monde (auto_dx/auto_dy : déplacement imposé ;
 goto_req/goto_px/goto_py : saut). À l'arrêt, on lit d'un coup (émulateur
 arrêté) :
 - l'écran affiché ($C000 ou $C400 selon world_scroll_front, et $D018) et la
-  Color RAM : exactement la vue 40x25 de world.txt dont le coin est la case
+  Color RAM, lignes 0-15 : exactement la vue 40x16 de world.txt dont le coin est la case
   (px >> 3, py >> 3), recalculée ici (mêmes règles que tools/mkworld.py ;
   cases au-delà du monde : remplissage $4D, couleur 5) ;
-- le décalage fin : $D016 et $D011 bits 0-2 = 7 - (px & 7) / 7 - (py & 7),
-  bit 3 à 0 (38 colonnes, 24 lignes). Le bit 7 de $D011 relu est celui de
-  la ligne raster courante : non vérifié.
+- les registres du haut de l'écran, relus à l'entrée du handler 1 du panneau
+  (ligne 174 ; plus bas, le panneau les change) : $D016 = multicolore +
+  7 - (px & 7) (38 colonnes), $D011 = mode texte + 7 - (py & 7) (24 lignes ;
+  le bit 7 relu est celui de la ligne raster : ignoré), $D021 = 13 ;
+- la Color RAM du panneau (lignes 16-23) reste à sa couleur (blanc).
 Déplacements en ligne droite et en diagonale, à 1 et 2 pixels par image :
 aucune attente (vue suivante toujours prête à temps) ; blocage aux quatre
 bords (chocs comptés) ; vues autour des frontières de segments.
@@ -27,6 +29,8 @@ import dbg  # noqa: E402
 import mkworld  # noqa: E402
 
 FILL_CODE, FILL_COLOR = 0x4D, 5
+ROWS, VIEW_H = 16, 121                     # WORLD_SCROLL_ROWS, WORLD_SCROLL_VIEW_H
+VIEW = ROWS * 40
 
 
 def fail(msg):
@@ -44,17 +48,26 @@ class C64:
             fail("label %s absent de build/monde.labels" % name)
         return a
 
-    def snapshot(self, names):
-        """{nom: octets} des variables (nom, taille) et de la vue, émulateur arrêté."""
+    def snapshot(self, names, top=False):
+        """{nom: octets} des variables (nom, taille) et de la vue, émulateur arrêté ;
+        top : arrêt à l'entrée du handler 1 du panneau (ligne 174), quand les
+        registres du VIC-II sont ceux du haut de l'écran."""
         m = dbg.Monitor(6502, 10)
         try:
+            if top:
+                cp = m.checkpoint_set(self.addr("panel_split1"), self.addr("panel_split1"), 4)
+                m.exit_monitor()
+                if m.wait_stopped(5) is None:
+                    fail("handler du panneau jamais atteint")
+                m.checkpoint_delete(cp["num"])
             out = {n: m.mem_get(self.addr(n), self.addr(n) + k - 1) for n, k in names}
             io = m.bank_id("io")
             front = m.mem_get(self.addr("_world_scroll_front"), self.addr("_world_scroll_front"))[0]
             base = 0xC400 if front else 0xC000
-            out["codes"] = m.mem_get(base, base + 999)
-            out["colors"] = bytes(b & 0x0F for b in m.mem_get(0xD800, 0xD800 + 999, io))
-            out["vic"] = m.mem_get(0xD011, 0xD018, io)
+            out["codes"] = m.mem_get(base, base + VIEW - 1)
+            out["colors"] = bytes(b & 0x0F for b in m.mem_get(0xD800, 0xD800 + VIEW - 1, io))
+            out["vic"] = m.mem_get(0xD011, 0xD021, io)
+            out["panel_colors"] = bytes(b & 0x0F for b in m.mem_get(0xD800 + VIEW, 0xD800 + VIEW + 319, io))
             out["front"] = front
         finally:
             m.exit_monitor()
@@ -110,7 +123,7 @@ class C64:
 
 def expected_view(model, rows, tx, ty):
     codes, colors = [], []
-    for y in range(ty, ty + 25):
+    for y in range(ty, ty + ROWS):
         for x in range(tx, tx + 40):
             if x < model["w"] and y < model["h"]:
                 v = rows[y][x]
@@ -123,22 +136,25 @@ def expected_view(model, rows, tx, ty):
 
 
 def check_view(c64, model, rows, what):
-    s = c64.snapshot([("_world_px", 4)])
+    s = c64.snapshot([("_world_px", 4)], top=True)
     p = s["_world_px"]
     px, py = p[0] | p[1] << 8, p[2] | p[3] << 8
     tx, ty = px >> 3, py >> 3
     ecodes, ecolors = expected_view(model, rows, tx, ty)
     if s["codes"] != ecodes:
-        i = next(i for i in range(1000) if s["codes"][i] != ecodes[i])
+        i = next(i for i in range(VIEW) if s["codes"][i] != ecodes[i])
         fail("%s : écran différent du monde en (%d, %d) px, case %d,%d : $%02X au lieu de $%02X"
              % (what, px, py, i % 40, i // 40, s["codes"][i], ecodes[i]))
     if s["colors"] != ecolors:
-        i = next(i for i in range(1000) if s["colors"][i] != ecolors[i])
+        i = next(i for i in range(VIEW) if s["colors"][i] != ecolors[i])
         fail("%s : Color RAM différente en (%d, %d) px, case %d,%d : %d au lieu de %d"
              % (what, px, py, i % 40, i // 40, s["colors"][i], ecolors[i]))
-    d011, d016, d018 = s["vic"][0], s["vic"][5], s["vic"][7]
-    if (d016 & 0x0F) != 7 - (px & 7) or (d011 & 0x0F) != 7 - (py & 7):
-        fail("%s : décalage fin $D016=$%02X $D011=$%02X pour (%d, %d)" % (what, d016, d011, px, py))
+    d011, d016, d018, d021 = s["vic"][0], s["vic"][5], s["vic"][7], s["vic"][16]
+    if (d016 & 0x1F) != 0x10 | (7 - (px & 7)) or (d011 & 0x7F) != 0x10 | (7 - (py & 7)) or d021 & 15 != 13:
+        fail("%s : registres du haut de l'écran $D016=$%02X $D011=$%02X $D021=$%02X pour (%d, %d)"
+             % (what, d016, d011, d021, px, py))
+    if s["panel_colors"] != bytes([1]) * (8 * 40):
+        fail("%s : Color RAM du panneau modifiée" % what)
     if d018 & 0xFE != (0x12 if s["front"] else 0x02):
         fail("%s : $D018=$%02X mais écran affiché %d" % (what, d018, s["front"]))
     print("ok : %s, (%d, %d) px : vue identique au monde (codes, Color RAM, décalage fin)" % (what, px, py))
@@ -149,7 +165,7 @@ def main():
     model = mkworld.build(os.path.join(ROOT, "libc64", "world", "world.txt"),
                           os.path.join(ROOT, "libc64", "tileset", "tileset.txt"))
     _, _, _, rows = mkworld.read_world(os.path.join(ROOT, "libc64", "world", "world.txt"))
-    max_px, max_py = model["w"] * 8 - 304, model["h"] * 8 - 192
+    max_px, max_py = model["w"] * 8 - 304, model["h"] * 8 - VIEW_H
     c64 = C64()
     c64.wait_frames(5)
     px, py = check_view(c64, model, rows, "départ")

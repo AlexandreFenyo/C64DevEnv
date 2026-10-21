@@ -1,13 +1,15 @@
-; world_render_col(col) : décode la colonne col (0-39) de la vue 40x25 dont
+; world_render_col(col) : décode la colonne col (0-39) de la vue qui défile
+; (40 x WORLD_SCROLL_ROWS cases) dont
 ; le coin haut gauche est la case (_wr_tx, _wr_ty), dans _wr_screen et
 ; _wr_colors (mêmes variables que world_render_rows). Cases hors du monde :
 ; FILL_*. Segment et rang dans le segment calculés une fois pour la colonne
-; (même colonne du monde sur les 25 lignes), puis par ligne : adresse du
+; (même colonne du monde sur toutes les lignes), puis par ligne : adresse du
 ; segment dans la table, saut des cases précédentes, une répétition d'un
 ; coup (~250 cycles par ligne).
 ; __fastcall__ : col dans A.
 
         .include "world_defs.inc"
+        .include "libc64_defs.inc"
 
         .export _world_render_col
         .import world_seglo_lo, world_seglo_hi, world_seghi_lo, world_seghi_hi
@@ -148,7 +150,7 @@ next:   inc wy                  ; (au-delà de WORLD_H : reste en remplissage)
         inc ptr3+1
 :       inc row
         lda row
-        cmp #25
+        cmp #WORLD_SCROLL_ROWS
         beq :+
         jmp rloop
 :       rts

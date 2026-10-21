@@ -8,8 +8,11 @@
    Mesure du temps processeur : pendant la préparation de la vue suivante
    (écran caché du double tampon), le tour de l'écran ($D020) passe au blanc :
    la hauteur des bandes blanches = part du temps de l'image occupée.
-   Touche M : mesure affichée ou non (coupée au départ). */
+   Touche M : mesure affichée ou non (coupée au départ).
+   Les deux tiers du haut de l'écran défilent ; le bas est un panneau de texte
+   (libc64/panel, jeu de caractères du système) : aide et position. */
 #include <c64.h>
+#include <stdlib.h>
 #include "libc64.h"
 #include "tiles.h"
 #include "world.h"
@@ -37,6 +40,24 @@ unsigned char goto_req;             /* 1 : aller en (goto_px, goto_py) */
 unsigned int goto_px, goto_py;
 unsigned char meter;                /* 1 : tour blanc pendant la préparation de la vue (touche M) */
 
+/* Position (en cases) dans le panneau, quand elle change. */
+static void show_position(void)
+{
+    static unsigned int shown_x = 0xFFFF, shown_y = 0xFFFF;
+    unsigned int x = world_px >> 3, y = world_py >> 3;
+    char buf[6];
+
+    if (x == shown_x && y == shown_y) {
+        return;
+    }
+    shown_x = x;
+    shown_y = y;
+    panel_print(12, 6, "     ");
+    panel_print(12, 6, utoa(x, buf, 10));
+    panel_print(24, 6, "     ");
+    panel_print(24, 6, utoa(y, buf, 10));
+}
+
 int main(void)
 {
     unsigned char joy, key, shift, speed, last_key = 64;
@@ -44,6 +65,13 @@ int main(void)
 
     tileset_install();
     VIC.bordercolor = COLOR_BLACK;
+    panel_init(COLOR_WHITE);
+    panel_print(1, 0, "Monde 400 x 150");
+    panel_print(1, 2, "Manette ou fleches : deplacement");
+    panel_print(1, 3, "Tir ou espace : vitesse 2");
+    panel_print(1, 4, "M : mesure du temps processeur");
+    panel_print(1, 6, "Position x =");
+    panel_print(20, 6, "y =");
     world_scroll_init(START_PX, START_PY);
 
     for (;;) {
@@ -69,7 +97,9 @@ int main(void)
         world_scroll_dy = dy * speed;
 
         world_scroll_meter = meter ? METER_COLOR : WORLD_SCROLL_NO_METER;
-        world_scroll_work();
+        if (!world_scroll_work()) {
+            show_position();                    /* rien à préparer : temps libre */
+        }
     }
     return 0;
 }
