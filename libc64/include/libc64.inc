@@ -10,9 +10,7 @@
 .import _joy2_read
 .import _sid_init, _sid_beep, _sid_release
 .import _rnd8
+.import _irq_init, _irq_done, _irq_register, _irq_unregister, _irq_vic_flags
+.import _raster_register, _raster_unregister
 
-J_UP    = $01
-J_DOWN  = $02
-J_LEFT  = $04
-J_RIGHT = $08
-J_FIRE  = $10
+.include "libc64_defs.inc"

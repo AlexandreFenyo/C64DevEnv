@@ -55,6 +55,50 @@ void __fastcall__ sid_beep(unsigned int freq);
 /* Relâche la note de la voix 1 (gate fermé). [C] */
 void sid_release(void);
 
+/* --- Interruptions (libc64/irq) -------------------------------------------
+   Le vecteur IRQ du KERNAL ($0314) est redirigé vers un répartiteur qui
+   appelle les handlers enregistrés dont les sources correspondent à
+   l'interruption, puis rend la main au KERNAL (CIA : clavier, horloge) ou
+   termine l'interruption (VIC-II, acquittée par le répartiteur).
+   Table de taille fixe ; un handler peut s'enregistrer de nouveau ou se
+   désenregistrer depuis l'interruption. Les registres de page zéro du C sont
+   sauvegardés : un handler peut être une fonction C (courte !). */
+#define IRQ_MAX_HANDLERS 4
+#define IRQ_SRC_CIA 0x01        /* timer du CIA 1 : IRQ du KERNAL, 60 Hz */
+#define IRQ_SRC_VIC 0x02        /* VIC-II : raster, collisions */
+typedef void (*irq_handler_t)(void);
+/* Installe le répartiteur (appelé aussi par irq_register). [asm] */
+void irq_init(void);
+/* Remet le vecteur d'origine et coupe l'IRQ raster : avant de rendre la
+   main au BASIC. [asm] */
+void irq_done(void);
+/* Enregistre h pour les sources données (IRQ_SRC_*) : renvoie l'indice de
+   l'emplacement, ou 0xFF si la table est pleine. Déjà enregistré : mise à
+   jour des sources, même emplacement. [asm] */
+unsigned char __fastcall__ irq_register(irq_handler_t h, unsigned char sources);
+/* Retire h de la table (sans effet s'il n'y est pas). [asm] */
+void __fastcall__ irq_unregister(irq_handler_t h);
+/* Contenu de $D019 lu pour l'interruption VIC-II en cours (bit 0 : raster). */
+extern unsigned char irq_vic_flags;
+
+/* --- Lignes raster (libc64/raster) ------------------------------------------
+   Appelle un handler quand le balayage atteint une ligne donnée (de
+   RASTER_LEAD à 311 en PAL ; écran visible : lignes 51 à 250). S'appuie sur
+   irq. L'interruption est demandée RASTER_LEAD lignes avant et la
+   bibliothèque attend la ligne exacte : le handler démarre au début de sa
+   ligne, à quelques cycles près, quel que soit le temps pris par le KERNAL et
+   le répartiteur. Deux handlers proches s'enchaînent sans nouvelle
+   interruption. Table de taille fixe. */
+#define RASTER_MAX_HANDLERS 4
+#define RASTER_LEAD 8
+/* Enregistre h à la ligne line (déjà enregistré : change sa ligne). Renvoie
+   0, ou 0xFF si la table est pleine. Utilisable depuis un handler (pour se
+   déplacer à une autre ligne ; coût : quelques lignes raster, laisser de la
+   marge avant le handler suivant). [asm] */
+unsigned char __fastcall__ raster_register(unsigned int line, irq_handler_t h);
+/* Retire h ; plus aucun handler : l'IRQ raster est coupée. [asm] */
+void __fastcall__ raster_unregister(irq_handler_t h);
+
 /* --- Hasard (libc64/random) ---------------------------------------------- */
 /* Nombre pseudo-aléatoire 1-255 (registre à décalage, période 255). [asm] */
 unsigned char rnd8(void);

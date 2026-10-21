@@ -1,9 +1,11 @@
 /* mygame/demo - première version du jeu : un vaisseau piloté à la manette
-   (port 2), un son quand on appuie sur le bouton de tir.
+   (port 2), un son quand on appuie sur le bouton de tir, et une bande de
+   couleur de 3 lignes au milieu de l'écran, dessinée par interruption raster
+   (libc64/raster, qui s'appuie sur libc64/irq).
 
    N'utilise de libc64 que screen_*, wait_frame, sprite_load/show/move,
-   joy2_read et sid_* : rnd8 et sprite_hide ne sont pas incorporés au
-   programme (voir build/demo.map, rubrique « Modules list »). */
+   joy2_read, sid_* et raster/irq : rnd8 et sprite_hide ne sont pas
+   incorporés au programme (voir build/demo.map, rubrique « Modules list »). */
 #include <c64.h>
 #include "libc64.h"
 
@@ -13,6 +15,9 @@
 #define Y_MAX 229
 #define SHIP_BLOCK 13   /* motif en $0340 (13 * 64) */
 #define NOTE_440 0x1D45
+#define BAND_LINE 141   /* ligne raster : milieu de l'écran visible (51-250) */
+#define BAND_HEIGHT 3
+#define BAND_COLOR COLOR_BLUE
 
 static const unsigned char ship[63] = {
     0x00, 0x18, 0x00,  0x00, 0x3C, 0x00,  0x00, 0x7E, 0x00,  0x00, 0x66, 0x00,
@@ -22,6 +27,18 @@ static const unsigned char ship[63] = {
     0x60, 0x18, 0x06,  0x00, 0x3C, 0x00,  0x00, 0x7E, 0x00,  0x00, 0x66, 0x00,
     0x00, 0x42, 0x00,
 };
+
+/* Bande : le fond change de couleur à BAND_LINE et redevient noir
+   BAND_HEIGHT lignes plus bas. Appelés sous interruption : très courts. */
+static void band_on(void)
+{
+    VIC.bgcolor0 = BAND_COLOR;
+}
+
+static void band_off(void)
+{
+    VIC.bgcolor0 = COLOR_BLACK;
+}
 
 /* Globales : visibles dans le débogueur (VS Code, portail). */
 unsigned int ship_x = 172;
@@ -39,6 +56,8 @@ int main(void)
     sid_init();
     sprite_load(0, SHIP_BLOCK, ship);
     sprite_show(0, COLOR_YELLOW);
+    raster_register(BAND_LINE, band_on);
+    raster_register(BAND_LINE + BAND_HEIGHT, band_off);
 
     for (;;) {
         wait_frame();

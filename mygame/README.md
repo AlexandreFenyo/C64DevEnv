@@ -4,6 +4,6 @@ Chaque sous-répertoire est une version du jeu, donc un programme : `mygame/demo
 
 Une version utilise les fonctions de `libc64/` (`#include "libc64.h"`). Seules celles qu'elle appelle sont incorporées à son `.prg` (voir `libc64/README.md`).
 
-- `demo/` : un vaisseau piloté à la manette du port 2, un son sur le bouton de tir.
+- `demo/` : un vaisseau piloté à la manette du port 2, un son sur le bouton de tir, une bande bleue de 3 lignes raster au milieu de l'écran (`libc64/raster`).
 
 Pour jouer avec le clavier : dans la fenêtre VICE, menu *Preferences → Settings → Input devices → Joystick*, port 2 sur « Keyset A » ou « Numpad ».
