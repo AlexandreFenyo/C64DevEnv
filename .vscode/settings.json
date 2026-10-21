@@ -5,5 +5,13 @@
     "*.s": "ca65",
     "*.inc": "ca65"
   },
-  "makefile.configureOnOpen": false
+  "makefile.configureOnOpen": false,
+  // Ports du moniteur de VICE (6502 binaire, 6510 texte) : pas des pages web.
+  // VS Code ne doit ni les proposer au navigateur, ni s'y connecter : une
+  // connexion pendant l'autostart peut bloquer VICE (voir CLAUDE.md, run.sh).
+  "remote.portsAttributes": {
+    "6502": { "label": "VICE moniteur binaire", "onAutoForward": "ignore" },
+    "6510": { "label": "VICE moniteur texte", "onAutoForward": "ignore" },
+    "8064": { "label": "Portail C64 (déjà sur localhost)", "onAutoForward": "ignore" }
+  }
 }
