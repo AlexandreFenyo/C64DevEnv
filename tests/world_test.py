@@ -13,7 +13,8 @@ arrêté) :
   (ligne 174 ; plus bas, le panneau les change) : $D016 = multicolore +
   7 - (px & 7) (38 colonnes), $D011 = mode texte + 7 - (py & 7) (24 lignes ;
   le bit 7 relu est celui de la ligne raster : ignoré), $D021 = 13 ;
-- la Color RAM du panneau (lignes 16-23) reste à sa couleur (blanc).
+- la Color RAM du panneau (lignes 16-23) reste à sa couleur (blanc ; la
+  boussole de mygame/monde en jaune).
 Déplacements en ligne droite et en diagonale, à 1 et 2 pixels par image :
 aucune attente (vue suivante toujours prête à temps) ; blocage aux quatre
 bords (chocs comptés) ; vues autour des frontières de segments.
@@ -153,7 +154,7 @@ def check_view(c64, model, rows, what):
     if (d016 & 0x1F) != 0x10 | (7 - (px & 7)) or (d011 & 0x7F) != 0x10 | (7 - (py & 7)) or d021 & 15 != 13:
         fail("%s : registres du haut de l'écran $D016=$%02X $D011=$%02X $D021=$%02X pour (%d, %d)"
              % (what, d016, d011, d021, px, py))
-    if s["panel_colors"] != bytes([1]) * (8 * 40):
+    if s["panel_colors"] != bytes([1, 7]) + bytes([1]) * (8 * 40 - 2):     # boussole jaune en (1, 0)
         fail("%s : Color RAM du panneau modifiée" % what)
     if d018 & 0xFE != (0x12 if s["front"] else 0x02):
         fail("%s : $D018=$%02X mais écran affiché %d" % (what, d018, s["front"]))

@@ -8,6 +8,8 @@ immobile, capture de l'écran (rang de capture = ligne raster - 16) :
 - panneau (lignes 184-246) : identique au pixel près pour tous les décalages
   (sauf la ligne de texte de la position), et le texte de mygame/monde y est
   (écran $F000, ligne PANEL_ROW) ;
+- motifs du panneau : seuls A-Z, chiffres, espace, « : », « = » copiés de la
+  ROM ; codes libres à zéro, sauf le graphique de mygame/monde (code 128) ;
 - vue (lignes 55-175) : en descendant d'un pixel dans le monde, l'image
   remonte d'une ligne : lignes 56-175 en py = lignes 55-174 en py + 1 ; la
   dernière ligne de la vue (175) est donc complète, jusqu'au bord droit.
@@ -52,14 +54,38 @@ def main():
                        stdout=subprocess.DEVNULL)
         return rows_of(CAP)
 
+    # Motifs du panneau ($E000-$E7FF) : caractères du texte copiés de la ROM
+    # (jeu majuscules, $D000), codes libres à zéro sauf la boussole de
+    # mygame/monde (code 128, panel_glyph) ; texte en codes écran du jeu
+    # majuscules ; boussole posée en (1, 0), en jaune.
+    text_codes = set(range(1, 27)) | {32, 61} | set(range(48, 59))
+    compass = bytes([0x18, 0x3C, 0x5A, 0xFF, 0x5A, 0x18, 0x18, 0x00])
     m = dbg.Monitor(6502, 10)
     try:
-        text = m.mem_get(0xF000 + 16 * 40, 0xF000 + 16 * 40 + 39, m.bank_id("ram"))
+        ram, rom, io = m.bank_id("ram"), m.bank_id("rom"), m.bank_id("io")
+        text = m.mem_get(0xF000 + 16 * 40, 0xF000 + 16 * 40 + 39, ram)
+        charset = m.mem_get(0xE000, 0xE7FF, ram)
+        chargen = m.mem_get(0xD000, 0xD7FF, rom)
+        color = m.mem_get(0xD800 + 16 * 40, 0xD800 + 16 * 40 + 1, io)
     finally:
         m.exit_monitor()
         m.close()
-    if text[1:6] != bytes([0x4D, 0x0F, 0x0E, 0x04, 0x05]):      # « Monde » en codes écran
+    if text[1] != 128 or text[3:8] != bytes([13, 15, 14, 4, 5]):           # boussole, « MONDE »
         fail("panneau : texte absent de l'écran $F000 (%s)" % text[:16].hex())
+    for code in range(256):
+        glyph = charset[code * 8:code * 8 + 8]
+        if code in text_codes:
+            expected = chargen[code * 8:code * 8 + 8]
+        elif code == 128:
+            expected = compass
+        else:
+            expected = bytes(8)
+        if glyph != expected:
+            fail("motif du code %d : %s au lieu de %s" % (code, glyph.hex(), expected.hex()))
+    if color[1] & 15 != 7 or color[0] & 15 != 1:
+        fail("panneau : couleurs %s (blanc, puis jaune pour la boussole)" % color.hex())
+    print("ok : motifs du panneau : %d caractères de la ROM, codes libres à zéro, boussole (code 128)"
+          % len(text_codes))
 
     px, base = 1000, 504
     shots = [shot(px, base + k) for k in range(9)]

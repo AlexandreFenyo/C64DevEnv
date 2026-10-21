@@ -40,6 +40,12 @@ unsigned char goto_req;             /* 1 : aller en (goto_px, goto_py) */
 unsigned int goto_px, goto_py;
 unsigned char meter;                /* 1 : tour blanc pendant la préparation de la vue (touche M) */
 
+/* Exemple de graphique du panneau (code libre 128) : une boussole. */
+#define ICON_COMPASS 128
+static const unsigned char compass[8] = {
+    0x18, 0x3C, 0x5A, 0xFF, 0x5A, 0x18, 0x18, 0x00
+};
+
 /* Position (en cases) dans le panneau, quand elle change. */
 static void show_position(void)
 {
@@ -66,7 +72,10 @@ int main(void)
     tileset_install();
     VIC.bordercolor = COLOR_BLACK;
     panel_init(COLOR_WHITE);
-    panel_print(1, 0, "Monde 400 x 150");
+    panel_glyph(ICON_COMPASS, compass);
+    panel_put(1, 0, ICON_COMPASS);
+    panel_color(1, 0, 1, COLOR_YELLOW);
+    panel_print(3, 0, "Monde 400 x 150");
     panel_print(1, 2, "Manette ou fleches : deplacement");
     panel_print(1, 3, "Tir ou espace : vitesse 2");
     panel_print(1, 4, "M : mesure du temps processeur");

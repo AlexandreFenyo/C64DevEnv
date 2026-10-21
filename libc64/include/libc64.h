@@ -174,25 +174,38 @@ unsigned char world_scroll_work(void);
 
 /* --- Panneau du bas de l'écran (libc64/panel) ---------------------------
    Sous la vue qui défile (world_scroll), une bande noire de 8 lignes raster
-   (176-183) puis PANEL_ROWS lignes de texte (raster 184-246) dans le jeu de
-   caractères du système (ROM minuscules/majuscules, copiée en RAM $E800 :
-   la banque VIC 3 ne voit pas la ROM), écran $F000, 40 colonnes, fond noir.
+   (176-183) puis PANEL_ROWS lignes de 40 cases (raster 184-246), fond noir,
+   écran $F000, motifs $E000 (2 Ko, RAM sous le KERNAL : la banque VIC 3 ne
+   voit pas la ROM). Texte : seuls A-Z, chiffres, espace, « : » et « = » sont
+   copiés de la ROM (jeu majuscules), à leur code écran ; les 217 autres
+   codes sont à zéro, réservés aux graphiques (panel_glyph, panel_put).
    Deux handlers raster (lignes 174 et 182) changent le mode du VIC-II au
    cycle près ; le handler de world_scroll rétablit le haut de l'écran à la
    ligne 250. Appeler après tileset_install(). [asm + C] */
 #define PANEL_ROW  16               /* ligne de l'écran $F000 où commence le panneau */
 #define PANEL_ROWS 8
-#define PANEL_SCREEN ((unsigned char *)0xF000)
-/* Copie le jeu de caractères, efface le panneau (couleur du texte : color)
-   et enregistre les deux handlers. [asm] */
+#define PANEL_SCREEN  ((unsigned char *)0xF000)
+#define PANEL_CHARSET ((unsigned char *)0xE000)
+/* Vrai si le code écran c est celui d'un caractère du texte (lettre, chiffre,
+   espace, « : » ou « = ») ; sinon il est libre pour un graphique. */
+#define PANEL_TEXT_CODE(c) (((c) >= 1 && (c) <= 26) || (c) == 32 || ((c) >= 48 && (c) <= 58) || (c) == 61)
+/* Motifs du texte, panneau effacé (couleur du texte : color), handlers
+   enregistrés. [asm] */
 void __fastcall__ panel_init(unsigned char color);
 /* Retire les handlers. [asm] */
 void panel_done(void);
-/* Texte colonne x (0-39), ligne y (0 à PANEL_ROWS-1) du panneau ; même
-   conversion que screen_print (écrire en casse normale). [C] */
+/* Texte colonne x (0-39), ligne y (0 à PANEL_ROWS-1) : lettres (minuscules ou
+   majuscules dans le source, affichées en majuscules), chiffres, espace,
+   « : », « = ». Les couleurs ne changent pas. [C] */
 void __fastcall__ panel_print(unsigned char x, unsigned char y, const char *s);
 /* Efface le panneau (espaces). [C] */
 void panel_clear(void);
+/* Motif (8 octets, ligne du haut d'abord) d'un code libre. [C] */
+void __fastcall__ panel_glyph(unsigned char code, const unsigned char *bits);
+/* Pose un code (texte ou graphique) en (x, y). [C] */
+void __fastcall__ panel_put(unsigned char x, unsigned char y, unsigned char code);
+/* Couleur de n cases à partir de (x, y). [C] */
+void __fastcall__ panel_color(unsigned char x, unsigned char y, unsigned char n, unsigned char color);
 
 /* --- Hasard (libc64/random) ---------------------------------------------- */
 /* Nombre pseudo-aléatoire 1-255 (registre à décalage, période 255). [asm] */

@@ -1,12 +1,14 @@
 ; panel_init(color) : panneau de texte en bas de l'écran, sous la vue qui
-; défile (world_scroll), dans le jeu de caractères du système.
+; défile (world_scroll), avec les caractères du système.
 ;
 ; Mémoire (banque VIC 3, $C000-$FFFF) : la ROM de caractères n'y est pas
-; visible du VIC-II : ses 4 Ko sont copiés en RAM $E000-$EFFF (sous la ROM
-; du KERNAL : le processeur y écrit, le VIC-II y lit) ; le panneau utilise le
-; jeu minuscules/majuscules ($E800) et son propre écran en $F000 (lignes
-; PANEL_ROW et suivantes). Color RAM : lignes PANEL_ROW.. à `color` (la vue
-; qui défile n'écrit que les lignes au-dessus).
+; visible du VIC-II ; les motifs du panneau sont en RAM $E000-$E7FF (sous la
+; ROM du KERNAL : le processeur y écrit, le VIC-II y lit). Seuls les
+; caractères du texte y sont copiés de la ROM (jeu majuscules) : A-Z,
+; chiffres, « : », espace, « = » (codes écran habituels) ; les 217 autres
+; codes sont à zéro, réservés aux graphiques (panel_glyph). Écran du panneau
+; en $F000 (lignes PANEL_ROW et suivantes) ; Color RAM des mêmes lignes à
+; `color` (la vue qui défile n'écrit que les lignes au-dessus).
 ;
 ; Coupure de l'écran (lignes raster) :
 ;   48-175  vue qui défile : WORLD_SCROLL_ROWS lignes de caractères, décalage
@@ -17,15 +19,14 @@
 ;   176-183 bande noire (mode invalide ECM+BMM) : cache la fin de la
 ;           dernière ligne de la vue (y lignes) ;
 ;   184-246 panneau : YSCROLL = 0 (184 = ligne de caractère), 40 colonnes,
-;           fond noir, écran $F000, motifs $E800.
-; Handler 1 (ligne 174) : écrit $D011 = noir + YSCROLL 7 dans la bordure
-; droite de la ligne 175 (cycles 55-63) : avant, la ligne 175 serait coupée ;
-; après, la ligne 176 commencerait une nouvelle ligne de caractères si y = 0.
-; YSCROLL 7 : une seule ligne de caractères (invisible) en 183 ; la ligne de
-; la vue en cours s'achève avant ; à 184, le VIC-II reprend la ligne PANEL_ROW.
-; L'entrée du handler et le délai dépendent de y : la ligne 174 (y = 6) ou
-; 175 (y = 7) est une « bad line » qui bloque le processeur 40 cycles :
-; délai par table (split1_delay), réglé par mesure.
+;           fond noir, écran $F000, motifs $E000.
+; Handler 1 (ligne 174) : écriture A, $D011 = YSCROLL 6 (7 si y = 7) au
+; milieu de la ligne 175 (invisible) : la ligne de caractères suivante tombe
+; dans la bande (182 ou 183), après la fin de la dernière ligne de la vue ;
+; écriture B, + ECM/BMM (noir) dans la bordure droite de 175 ou au tout début
+; de 176. L'entrée du handler et les délais dépendent de y : la ligne 174
+; (y = 6) ou 175 (y = 7) est une « bad line » qui bloque le processeur 40
+; cycles : délais par table (split1_delay1/2), réglés par mesure.
 ; Handler 2 (ligne 182, jamais une bad line) : $D018, $D016, $D021 pendant la
 ; bande noire, puis $D011 = texte + YSCROLL 0 après la bad line 183 (le
 ; processeur, bloqué pendant celle-ci, repart au cycle 55) : le panneau
@@ -42,45 +43,69 @@ VIC_CTRL1 = $D011
 VIC_CTRL2 = $D016
 VIC_ADDR  = $D018
 VIC_BG    = $D021
-CHARSET   = $E000               ; copie de la ROM (4 Ko : deux jeux)
+CHARSET   = $E000               ; motifs du panneau (2 Ko, 256 codes)
 SCREEN    = $F000
 COLORS    = $D800
 LINE1     = 174
 LINE2     = 182
-PANEL_D018 = $CA                ; écran $F000 (12 x 1 Ko), motifs $E800 (5 x 2 Ko)
+PANEL_D018 = $C8                ; écran $F000 (12 x 1 Ko), motifs $E000 (4 x 2 Ko)
 PANEL_BG  = 0                   ; noir
 
         .segment "CODE"
 
 .proc _panel_init
         pha                     ; couleur du texte
-        ; Copie de la ROM de caractères ($D000-$DFFF) en RAM $E000-$EFFF :
+        ; Motifs du panneau ($E000-$E7FF) : tout à zéro (codes libres pour
+        ; les graphiques), puis les seuls caractères du texte, copiés de la
+        ; ROM (jeu majuscules/graphiques, $D000) à leur code écran.
         ; $01 = $32 : ROM de caractères visible en $D000, KERNAL, pas de BASIC
         ; (le programme peut occuper $A000-$BFFF).
+        lda #<CHARSET
+        sta ptr2
+        lda #>CHARSET
+        sta ptr2+1
+        lda #0
+        tay
+        ldx #8
+clr:    sta (ptr2),y
+        iny
+        bne clr
+        inc ptr2+1
+        dex
+        bne clr
         php
         sei
         lda $01
         pha
         lda #$32
         sta $01
-        lda #<$D000
+        ldx #0
+glyph:  lda text_codes,x        ; ptr1 = $D000 + code * 8, ptr2 = $E000 + code * 8
         sta ptr1
-        lda #>$D000
+        lda #0
         sta ptr1+1
-        lda #<CHARSET
+        asl ptr1
+        rol ptr1+1
+        asl ptr1
+        rol ptr1+1
+        asl ptr1
+        rol ptr1+1
+        lda ptr1
         sta ptr2
-        lda #>CHARSET
+        lda ptr1+1
+        ora #>CHARSET
         sta ptr2+1
-        ldx #16
-        ldy #0
-copy:   lda (ptr1),y
+        lda ptr1+1
+        ora #>$D000
+        sta ptr1+1
+        ldy #7
+:       lda (ptr1),y
         sta (ptr2),y
-        iny
-        bne copy
-        inc ptr1+1
-        inc ptr2+1
-        dex
-        bne copy
+        dey
+        bpl :-
+        inx
+        cpx #TEXT_CODES
+        bne glyph
         pla
         sta $01
         plp
@@ -146,6 +171,14 @@ fill:   lda #32
 .endproc
 
         .segment "RODATA"
+
+; Codes écran copiés de la ROM : A-Z (1-26), espace (32), 0-9 et « : »
+; (48-58), « = » (61). Les autres codes (217) sont libres : panel_glyph.
+text_codes:
+        .byte 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
+        .byte 20, 21, 22, 23, 24, 25, 26, 32, 48, 49, 50, 51, 52, 53, 54, 55, 56
+        .byte 57, 58, 61
+TEXT_CODES = * - text_codes
 
 ; Handler 1, réglé par mesure (tours de boucle de 5 cycles), selon y :
 ; - y = 0-5 : entrée vers 174/36 ; A vers 175/41, B vers 175/60 ;
