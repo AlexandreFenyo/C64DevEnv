@@ -107,9 +107,9 @@ unsigned char world_scroll_work(void)
     if (tx == 0xFFFF || step == STEP_DONE) {
         return 0;
     }
-    bg = VIC.bgcolor0;
+    bg = VIC.bordercolor;
     if (world_scroll_meter != WORLD_SCROLL_NO_METER) {
-        VIC.bgcolor0 = world_scroll_meter;   /* mesure : fond coloré pendant l'étape */
+        VIC.bordercolor = world_scroll_meter;    /* mesure : tour coloré pendant l'étape */
     }
     fscr = screen_of(front);
     bscr = screen_of(front ^ 1);
@@ -144,6 +144,6 @@ unsigned char world_scroll_work(void)
         ws_back_step = step + 1;                /* étape valide : la cible n'a pas changé */
     }
     CLI();
-    VIC.bgcolor0 = bg;
+    VIC.bordercolor = bg;
     return 1;
 }

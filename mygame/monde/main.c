@@ -7,8 +7,9 @@
    world_scroll ; la boucle principale lit les commandes et prépare la vue
    suivante (world_scroll_work).
    Mesure du temps processeur : pendant la préparation de la vue suivante
-   (écran caché du double tampon), la couleur de fond ($D021) passe au rouge :
-   la hauteur des bandes rouges à l'écran = part du temps de l'image occupée.
+   (écran caché du double tampon), le tour de l'écran ($D020) passe au blanc :
+   la hauteur des bandes blanches = part du temps de l'image occupée (rouge,
+   réservé au choc contre un bord, reste rouge en dehors des bandes).
    Touche M : mesure affichée ou non. */
 #include <c64.h>
 #include "libc64.h"
@@ -31,13 +32,13 @@
 #define K_D 18
 #define K_SPACE 60
 #define K_M 36
-#define METER_COLOR COLOR_RED                  /* fond pendant world_scroll_work() */
+#define METER_COLOR COLOR_WHITE                /* tour pendant world_scroll_work() */
 
 /* Globales : lues par le débogueur et par le test 6. */
 signed char auto_dx, auto_dy;       /* déplacement imposé (tests, démonstration) */
 unsigned char goto_req;             /* 1 : aller en (goto_px, goto_py) */
 unsigned int goto_px, goto_py;
-unsigned char meter = 1;            /* 1 : fond rouge pendant la préparation de la vue */
+unsigned char meter = 1;            /* 1 : tour blanc pendant la préparation de la vue */
 
 int main(void)
 {
