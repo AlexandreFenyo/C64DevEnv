@@ -154,6 +154,10 @@ extern unsigned int world_scroll_stalls;     /* images où la vue suivante n'ét
 extern unsigned int world_scroll_frames;     /* images traitées */
 extern unsigned char world_scroll_bumps;     /* images où la vue a buté sur un bord */
 extern unsigned char world_scroll_front;     /* écran affiché : 0 = $C000, 1 = $C400 */
+/* Mesure du temps processeur : couleur de fond ($D021) pendant chaque étape
+   de world_scroll_work() (WORLD_SCROLL_NO_METER : pas de mesure, défaut). */
+#define WORLD_SCROLL_NO_METER 0xFF
+extern unsigned char world_scroll_meter;
 /* Affiche la vue en (px, py) (bornée, ~4 images) et démarre le handler. */
 void __fastcall__ world_scroll_init(unsigned int px, unsigned int py);
 /* Arrête le handler (la vue reste affichée). */

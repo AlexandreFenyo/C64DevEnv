@@ -46,6 +46,8 @@ extern unsigned char ws_cur_ty, ws_back_ty;
 extern unsigned char ws_back_step, ws_gen;   /* étape de préparation, génération de la cible */
 extern unsigned char *ws_front_colors, *ws_back_colors;
 
+unsigned char world_scroll_meter = WORLD_SCROLL_NO_METER;
+
 #define STEP_COPY 0                          /* étapes de préparation */
 #define STEP_ROW  1
 #define STEP_COL  2
@@ -85,7 +87,7 @@ void world_scroll_done(void)
 
 unsigned char world_scroll_work(void)
 {
-    unsigned char gen, step, ty, front;
+    unsigned char gen, step, ty, front, bg;
     unsigned int tx;
     int off;
     signed char sx, sy;
@@ -104,6 +106,10 @@ unsigned char world_scroll_work(void)
     CLI();
     if (tx == 0xFFFF || step == STEP_DONE) {
         return 0;
+    }
+    bg = VIC.bgcolor0;
+    if (world_scroll_meter != WORLD_SCROLL_NO_METER) {
+        VIC.bgcolor0 = world_scroll_meter;   /* mesure : fond coloré pendant l'étape */
     }
     fscr = screen_of(front);
     bscr = screen_of(front ^ 1);
@@ -138,5 +144,6 @@ unsigned char world_scroll_work(void)
         ws_back_step = step + 1;                /* étape valide : la cible n'a pas changé */
     }
     CLI();
+    VIC.bgcolor0 = bg;
     return 1;
 }

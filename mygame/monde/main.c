@@ -5,7 +5,11 @@
    bordure clignote en rouge quand on bute).
    Le déplacement est appliqué à chaque image par le handler raster de
    world_scroll ; la boucle principale lit les commandes et prépare la vue
-   suivante (world_scroll_work). */
+   suivante (world_scroll_work).
+   Mesure du temps processeur : pendant la préparation de la vue suivante
+   (écran caché du double tampon), la couleur de fond ($D021) passe au rouge :
+   la hauteur des bandes rouges à l'écran = part du temps de l'image occupée.
+   Touche M : mesure affichée ou non. */
 #include <c64.h>
 #include "libc64.h"
 #include "tiles.h"
@@ -26,15 +30,18 @@
 #define K_S 13
 #define K_D 18
 #define K_SPACE 60
+#define K_M 36
+#define METER_COLOR COLOR_RED                  /* fond pendant world_scroll_work() */
 
 /* Globales : lues par le débogueur et par le test 6. */
 signed char auto_dx, auto_dy;       /* déplacement imposé (tests, démonstration) */
 unsigned char goto_req;             /* 1 : aller en (goto_px, goto_py) */
 unsigned int goto_px, goto_py;
+unsigned char meter = 1;            /* 1 : fond rouge pendant la préparation de la vue */
 
 int main(void)
 {
-    unsigned char joy, key, shift, speed, bumps_seen = 0;
+    unsigned char joy, key, shift, speed, bumps_seen = 0, last_key = 64;
     unsigned int bump_until = 0;
     signed char dx, dy;
 
@@ -57,6 +64,10 @@ int main(void)
         if ((joy & J_UP) || key == K_W || (key == K_CRSR_UD && shift)) dy = -1;
         if ((joy & J_DOWN) || key == K_S || (key == K_CRSR_UD && !shift)) dy = 1;
         speed = ((joy & J_FIRE) || key == K_SPACE) ? 2 : 1;
+        if (key == K_M && last_key != K_M) {        /* M : mesure affichée ou non */
+            meter ^= 1;
+        }
+        last_key = key;
         world_scroll_dx = dx * speed;
         world_scroll_dy = dy * speed;
 
@@ -68,6 +79,7 @@ int main(void)
             bump_until = 0;
             VIC.bordercolor = COLOR_BLACK;
         }
+        world_scroll_meter = meter ? METER_COLOR : WORLD_SCROLL_NO_METER;
         world_scroll_work();
     }
     return 0;
