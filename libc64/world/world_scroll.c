@@ -89,52 +89,62 @@ void world_scroll_done(void)
     raster_unregister(world_scroll_irq);
 }
 
+/* Variables de world_scroll_work : statiques (accès direct, rapide) plutôt
+   que locales (pile logicielle de cc65, lente). */
+static unsigned char s_gen, s_step, s_ty, s_front, s_cur_ty, s_bg;
+static unsigned int s_tx, s_cur_tx;
+static unsigned char *s_fcol, *s_bcol;
+
 unsigned char world_scroll_work(void)
 {
-    unsigned char gen, step, ty, front, bg;
-    unsigned int tx;
     int off;
     signed char sx, sy;
-    unsigned char *fscr, *bscr, *fcol, *bcol;
+    unsigned char *fscr, *bscr;
 
+    /* Instantané de l'état partagé avec le handler : interruptions coupées le
+       moins longtemps possible (copies d'octets, ~100 cycles). Plus de 8
+       lignes raster (RASTER_LEAD) avec l'IRQ en attente retarderaient les
+       handlers du panneau, réglés au cycle près (constaté avec ~310 cycles). */
     SEI();
-    gen = ws_gen;
-    step = ws_back_step;
-    tx = ws_back_tx;
-    ty = ws_back_ty;
-    front = world_scroll_front;
-    fcol = ws_front_colors;
-    bcol = ws_back_colors;
-    sx = (signed char)(tx - ws_cur_tx);
-    sy = (signed char)(ty - ws_cur_ty);
+    s_gen = ws_gen;
+    s_step = ws_back_step;
+    s_tx = ws_back_tx;
+    s_ty = ws_back_ty;
+    s_front = world_scroll_front;
+    s_fcol = ws_front_colors;
+    s_bcol = ws_back_colors;
+    s_cur_tx = ws_cur_tx;
+    s_cur_ty = ws_cur_ty;
     CLI();
-    if (tx == 0xFFFF || step == STEP_DONE) {
+    if (s_tx == 0xFFFF || s_step == STEP_DONE) {
         return 0;
     }
-    bg = VIC.bordercolor;
+    sx = (signed char)(s_tx - s_cur_tx);
+    sy = (signed char)(s_ty - s_cur_ty);
+    s_bg = VIC.bordercolor;
     if (world_scroll_meter != WORLD_SCROLL_NO_METER) {
         VIC.bordercolor = world_scroll_meter;    /* mesure : tour coloré pendant l'étape */
     }
-    fscr = screen_of(front);
-    bscr = screen_of(front ^ 1);
-    wr_tx = tx;
-    wr_ty = ty;
+    fscr = screen_of(s_front);
+    bscr = screen_of(s_front ^ 1);
+    wr_tx = s_tx;
+    wr_ty = s_ty;
     wr_screen = bscr;
-    wr_colors = bcol;
-    if (step == STEP_COPY) {
+    wr_colors = s_bcol;
+    if (s_step == STEP_COPY) {
         /* vue cible[i] = vue affichée[i + off] : copie linéaire ; les cases
            qui débordent d'une ligne sur l'autre sont celles de la nouvelle
            colonne, réécrites ensuite. */
         off = sy * 40 + sx;
         if (off >= 0) {
             wc_dst1 = bscr; wc_src1 = fscr + off;
-            wc_dst2 = bcol; wc_src2 = fcol + off;
+            wc_dst2 = s_bcol; wc_src2 = s_fcol + off;
         } else {
             wc_dst1 = bscr - off; wc_src1 = fscr;
-            wc_dst2 = bcol - off; wc_src2 = fcol;
+            wc_dst2 = s_bcol - off; wc_src2 = s_fcol;
         }
         world_copy2(WORLD_SCROLL_ROWS * 40 - (off >= 0 ? off : -off));
-    } else if (step == STEP_ROW) {
+    } else if (s_step == STEP_ROW) {
         if (sy) {
             world_render_rows(sy > 0 ? WORLD_SCROLL_ROWS - 1 : 0, 1);
         }
@@ -144,10 +154,10 @@ unsigned char world_scroll_work(void)
         }
     }
     SEI();
-    if (gen == ws_gen && ws_back_step == step) {
-        ws_back_step = step + 1;                /* étape valide : la cible n'a pas changé */
+    if (s_gen == ws_gen && ws_back_step == s_step) {
+        ws_back_step = s_step + 1;              /* étape valide : la cible n'a pas changé */
     }
     CLI();
-    VIC.bordercolor = bg;
+    VIC.bordercolor = s_bg;
     return 1;
 }

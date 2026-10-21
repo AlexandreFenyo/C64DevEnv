@@ -8,8 +8,8 @@
 #define WORLD_VIEW_H   25
 #define WORLD_MAX_X    360
 #define WORLD_MAX_Y    125
-#define WORLD_SEG      40
-#define WORLD_NSEG     10
+#define WORLD_SEG      20
+#define WORLD_NSEG     20
 #define WORLD_NV       232
 
 #endif

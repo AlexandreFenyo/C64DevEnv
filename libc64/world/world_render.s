@@ -8,9 +8,10 @@
 ; automodifiant. __fastcall__ : n dans A, row0 sur la pile C.
 
         .include "world_defs.inc"
+        .include "world_nib.inc"
 
         .export _world_render_rows, _wr_tx, _wr_ty, _wr_screen, _wr_colors
-        .import world_seek_segment, world_x, world_y, _world_cell_code, _world_cell_color
+        .import world_seek_segment, world_seg_next, world_x, world_y, _world_cell_code, _world_cell_color
         .import incsp1
         .importzp sp, ptr1
 
@@ -28,6 +29,7 @@ row:        .res 1
 ncols:      .res 1              ; colonnes dans le monde (40 au plus)
 skipcnt:    .res 1
 rep:        .res 1
+segleft:    .res 1              ; cases restant dans le segment courant
 val:        .res 1
 
         .segment "CODE"
@@ -80,7 +82,9 @@ rloop:  ; adresses de la ligne row dans l'écran et le tampon (code automodifian
         clc
         adc row
         cmp #WORLD_H
-        bcs fillrow             ; ligne hors du monde
+        bcc inworld
+        jmp fillrow             ; ligne hors du monde
+inworld:
         sta world_y
         lda _wr_tx
         sta world_x
@@ -88,20 +92,21 @@ rloop:  ; adresses de la ligne row dans l'écran et le tampon (code automodifian
         sta world_x+1
         jsr world_seek_segment  ; ptr1 = segment, A = cases à sauter
         sta skipcnt
-        lda ptr1
-        sta src+1
-        lda ptr1+1
-        sta src+2
         lda #0
         sta rep
+        lda #WORLD_SEG
+        sta segleft
         ldy #0
 cell:   lda rep
-        bne fromrep
-src:    lda $FFFF               ; octet codé suivant
-        inc src+1
+        beq :+
+        jmp fromrep
+:       lda segleft             ; fin du segment : le suivant (pas contigu en mémoire)
         bne :+
-        inc src+2
-:       cmp #WORLD_NV
+        jsr world_seg_next      ; préserve Y
+        lda #WORLD_SEG
+        sta segleft
+:       NIB_TOKEN               ; jeton suivant (préserve Y)
+        cmp #WORLD_NV
         bcs token
         sta val                 ; littéral
         jmp got
@@ -110,7 +115,8 @@ token:  sbc #WORLD_NV-1         ; retenue à 1 : répétitions restantes (>= 1)
         jmp got
 fromrep:
         dec rep
-got:    lda skipcnt
+got:    dec segleft
+        lda skipcnt
         beq emit
         dec skipcnt
         jmp cell
@@ -121,7 +127,8 @@ scr:    sta $FFFF,y
 col:    sta $FFFF,y
         iny
         cpy ncols
-        bne cell
+        beq fillrow
+        jmp cell
 fillrow:
         cpy #40
         beq next

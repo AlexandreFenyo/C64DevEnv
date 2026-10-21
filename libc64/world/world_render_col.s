@@ -4,12 +4,15 @@
 ; _wr_colors (mêmes variables que world_render_rows). Cases hors du monde :
 ; FILL_*. Segment et rang dans le segment calculés une fois pour la colonne
 ; (même colonne du monde sur toutes les lignes), puis par ligne : adresse du
-; segment dans la table, saut des cases précédentes, une répétition d'un
-; coup (~250 cycles par ligne).
+; segment dans la table, saut des cases précédentes : par octet entier (2
+; jetons) tant qu'ils précèdent la case voulue (tables world_nib_cells2 et
+; world_nib_lastlit), une répétition d'un coup, jeton par jeton à la fin.
 ; __fastcall__ : col dans A.
 
         .include "world_defs.inc"
         .include "libc64_defs.inc"
+        .include "world_nib.inc"
+        .import world_nib_cells2, world_nib_lastlit
 
         .export _world_render_col
         .import world_seglo_lo, world_seglo_hi, world_seghi_lo, world_seghi_hi
@@ -26,6 +29,7 @@ row:        .res 1              ; ligne de la vue
 wy:         .res 1              ; ligne du monde
 skip:       .res 1              ; rang de la colonne dans son segment
 runlen:     .res 1
+left:       .res 1              ; cases restant avant la case voulue
 val:        .res 1
 wxl:        .res 1              ; colonne du monde
 wxh:        .res 1
@@ -69,7 +73,7 @@ fillcol:
         lda #WORLD_H
         sta wy
         jmp rloop
-inside: ; segment k = colonne / WORLD_SEG, skip = reste (k <= 9)
+inside: ; segment k = colonne / WORLD_SEG, skip = reste (k < WORLD_NSEG)
         lda wxl
         ldx wxh
         ldy #0
@@ -95,33 +99,56 @@ divok:  sta skip
 
 rloop:  ldy wy
         cpy #WORLD_H
-        bcs fill
+        bcc :+
+        jmp fill
+:
 tablo:  lda $FFFF,y
         sta ptr1
 tabhi:  lda $FFFF,y
         sta ptr1+1
-        ldy #0
-        lda (ptr1),y            ; un segment commence par un littéral
+        lda #0
+        sta world_nib_half      ; un segment commence sur un octet entier
+        tay                     ; Y = position dans le segment
+        NIB_TOKEN Y             ; un segment commence par un littéral
         sta val
-        iny
-        ldx skip                ; X = cases restant avant la case voulue
-        beq emit
-cell:   lda (ptr1),y
-        iny
+        lda skip                ; cases restant avant la case voulue
+        bne :+
+        jmp emit
+:
+        sta left
+cell:   lda world_nib_half      ; sur un octet entier : saut rapide possible
+        bne slow
+fast:   lda (ptr1),y            ; 2 jetons d'un coup, s'ils précèdent la case voulue
+        tax
+        lda world_nib_cells2,x  ; leurs cases (0 : échappement)
+        beq slow
+        cmp left
+        bcs slow                ; l'octet atteint la case voulue : jeton par jeton
+        eor #$FF                ; left -= cases (C = 0 : -cases - 1 + 1)
+        sec
+        adc left
+        sta left
+        lda world_nib_lastlit,x
+        cmp #$FF
+        beq :+
+        sta val                 ; dernier littéral de l'octet
+:       iny
+        bne fast                ; toujours (segment < 256 octets)
+slow:   NIB_TOKEN Y
         cmp #WORLD_NV
         bcs token
         sta val                 ; littéral : une case
-        dex
-        bne cell
+        dec left
         beq emit
+        jmp cell
 token:  sbc #WORLD_NV-2         ; répétition de k cases (C = 1) : sautées d'un coup
         sta runlen
-        txa
+        lda left
         sec
         sbc runlen
         beq emit                ; la case voulue est dans la répétition
         bcc emit
-        tax
+        sta left
         jmp cell
 emit:   ldx val
         ldy #0

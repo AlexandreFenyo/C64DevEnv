@@ -131,7 +131,7 @@ void __fastcall__ tile_fill(unsigned char code);
 /* --- Monde du jeu (libc64/world) ----------------------------------------------
    Carte de WORLD_W x WORLD_H tiles (constantes dans world.h), importée de la
    carte HTML (libc64/world/world.txt) et compressée par tools/mkworld.py
-   (~27 Ko). Affichage dans l'écran du tileset (TILESET_SCREEN, $C000) :
+   (~20 Ko : jetons en quartets, segments de 20 colonnes partagés). Affichage dans l'écran du tileset (TILESET_SCREEN, $C000) :
    appeler tileset_install() d'abord. */
 /* Fenêtre 40x25 dont le coin haut gauche est la case (x, y), ramenée dans
    [0, WORLD_MAX_X] x [0, WORLD_MAX_Y]. Environ 3 images. [asm] */
