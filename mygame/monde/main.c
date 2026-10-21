@@ -8,7 +8,7 @@
    Mesure du temps processeur : pendant la préparation de la vue suivante
    (écran caché du double tampon), le tour de l'écran ($D020) passe au blanc :
    la hauteur des bandes blanches = part du temps de l'image occupée.
-   Touche M : mesure affichée ou non. */
+   Touche M : mesure affichée ou non (coupée au départ). */
 #include <c64.h>
 #include "libc64.h"
 #include "tiles.h"
@@ -35,7 +35,7 @@
 signed char auto_dx, auto_dy;       /* déplacement imposé (tests, démonstration) */
 unsigned char goto_req;             /* 1 : aller en (goto_px, goto_py) */
 unsigned int goto_px, goto_py;
-unsigned char meter = 1;            /* 1 : tour blanc pendant la préparation de la vue */
+unsigned char meter;                /* 1 : tour blanc pendant la préparation de la vue (touche M) */
 
 int main(void)
 {
