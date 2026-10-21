@@ -313,11 +313,8 @@ def scenario_c():
     c.body("stepIn", {"threadId": 1})
     c.stopped()
     f, line, name = c.where()
-    check(name == "square", "stepIn : dans square (%s:%d)" % (f, line))
-    c.body("next", {"threadId": 1})
-    c.stopped()
-    f, line, name = c.where()
-    check(line == l_mul, "next : ligne %d (r = n * n)" % line)
+    check(name == "square" and line == l_mul,
+          "stepIn : dans square, prologue sauté, ligne %d (r = n * n) (%s:%d)" % (l_mul, f, line))
     loc, _ = c.variables("Locales")
     check(loc.get("n", {}).get("value", "").startswith("2 "), "paramètre n = %s" % loc.get("n", {}).get("value"))
     frames = c.top()
@@ -405,6 +402,38 @@ def scenario_chips():
     c.close()
 
 
+def scenario_lib():
+    print("--- bibliothèque : mygame/demo entre dans libc64 (C et asm)")
+    rel = "mygame/demo/main.c"
+    src = os.path.join(ROOT, rel)
+    l_show = line_of(rel, "sprite_show(0, COLOR_YELLOW);")
+    l_move = line_of(rel, "sprite_move(0, ship_x, ship_y);")
+    c = start(src, stop_on_entry=False)
+    c.body("setBreakpoints", {"source": {"path": src}, "breakpoints": [{"line": l_show}, {"line": l_move}]})
+    c.body("configurationDone")
+    c.stopped()
+    check(c.where()[1] == l_show, "demo : arrêt ligne %d (sprite_show)" % l_show)
+    c.body("stepIn", {"threadId": 1})
+    c.stopped()
+    f, line, name = c.where()
+    check(f == "sprite_show.c" and name == "sprite_show", "stepIn -> libc64/sprite/sprite_show.c (%s:%d %s)" % (f, line, name))
+    loc, _ = c.variables("Locales")
+    check(loc.get("color", {}).get("value", "").startswith("7 "), "paramètre color = %s" % loc.get("color", {}).get("value"))
+    c.body("stepOut", {"threadId": 1})
+    c.stopped()
+    check(c.where()[0] == "main.c", "stepOut : retour dans main.c (%s:%d)" % c.where()[:2])
+    c.body("continue", {"threadId": 1})
+    c.stopped()
+    check(c.where()[1] == l_move, "arrêt ligne %d (sprite_move)" % l_move)
+    c.body("stepIn", {"threadId": 1})
+    c.stopped()
+    f, line, name = c.where()
+    check(f == "sprite_move.s", "stepIn -> fonction asm libc64/sprite/sprite_move.s (%s:%d %s)" % (f, line, name))
+    names = [fr["name"] for fr in c.top()]
+    check(len(names) > 1 and names[1] == "main", "pile d'appels : %s" % names[:3])
+    c.close()
+
+
 def scenario_attach():
     print("--- attach : instance lancée par run.sh (examples/hello)")
     subprocess.run(["tools/run.sh", "--headless", "--warp", "--monitor", "build/hello.prg"], cwd=ROOT,
@@ -459,6 +488,7 @@ def main():
         scenario_asm()
         scenario_c()
         scenario_chips()
+        scenario_lib()
         scenario_attach()
     finally:
         subprocess.run(["tools/stop.sh", "--quiet", "--all"])

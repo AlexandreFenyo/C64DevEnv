@@ -227,7 +227,30 @@ def sync_check():
         problems.append("tools/dbg.py : '%s' documentée mais absente de COMMANDS" % c)
     for c in sorted(set(DBG_FILE_ARG) - keys):
         problems.append("tools/dbg.py : DBG_FILE_ARG cite '%s', absente de COMMANDS" % c)
+    problems += program_dirs_problems()
     return {"ok": not problems, "problems": problems, "details": details}
+
+
+def program_dirs_problems():
+    """Répertoires de programmes : SRC_DIRS du Makefile == PROGRAM_DIRS du
+    portail == PROGRAM_DIRS de tools/dap.py (VS Code)."""
+    problems = []
+    try:
+        with open(os.path.join(ROOT, "Makefile"), encoding="utf-8") as f:
+            m = re.search(r"^SRC_DIRS\s*:=\s*(.*)$", f.read(), re.M)
+        make_dirs = tuple(m.group(1).split()) if m else ()
+        with open(os.path.join(ROOT, "tools", "dap.py"), encoding="utf-8") as f:
+            m = re.search(r"^PROGRAM_DIRS\s*=\s*\(([^)]*)\)", f.read(), re.M)
+        dap_dirs = tuple(re.findall(r'"([^"]+)"', m.group(1))) if m else ()
+    except OSError as e:
+        return ["répertoires de programmes : %s" % e]
+    if make_dirs != PROGRAM_DIRS:
+        problems.append("Makefile : SRC_DIRS = %s, le portail connaît %s (PROGRAM_DIRS)"
+                        % (" ".join(make_dirs), " ".join(PROGRAM_DIRS)))
+    if dap_dirs != PROGRAM_DIRS:
+        problems.append("tools/dap.py : PROGRAM_DIRS = %s, le portail connaît %s"
+                        % (" ".join(dap_dirs), " ".join(PROGRAM_DIRS)))
+    return problems
 
 
 def flag(script, name):
@@ -260,10 +283,16 @@ def list_programs():
     return progs
 
 
+# Répertoires des programmes (SRC_DIRS du Makefile) et des sources affichables
+# (programmes + bibliothèque libc64, où le pas à pas peut entrer).
+PROGRAM_DIRS = ("src", "examples", "mygame")
+SOURCE_DIRS = PROGRAM_DIRS + ("libc64",)
+
+
 def program_sources(name):
     """Fichiers sources d'un programme (mêmes règles que le Makefile)."""
     found = []
-    for d in ("src", "examples"):
+    for d in PROGRAM_DIRS:
         pdir = os.path.join(ROOT, d, name)
         if os.path.isdir(pdir):
             found += sorted(os.path.join(d, name, f) for f in os.listdir(pdir)
@@ -579,7 +608,7 @@ def get_file(h, q, rel):
 def get_source(h, q, rel):
     rel = urllib.parse.unquote(rel)
     path = os.path.realpath(os.path.join(ROOT, rel))
-    allowed = [os.path.realpath(os.path.join(ROOT, d)) + os.sep for d in ("src", "examples")]
+    allowed = [os.path.realpath(os.path.join(ROOT, d)) + os.sep for d in SOURCE_DIRS]
     if not any(path.startswith(a) for a in allowed) or not os.path.isfile(path):
         raise ApiError(HTTPStatus.NOT_FOUND, "source introuvable : %s" % rel)
     with open(path, "rb") as f:
@@ -671,6 +700,28 @@ def get_ram(h, q):
     h.send_bytes(data, "application/octet-stream")
 
 
+def line_entries(prog, dbgfile, lines):
+    """{fichier: {ligne: [adresses]}} : tous les points d'entrée de chaque
+    ligne (l'optimiseur de cc65 saute parfois au milieu d'une ligne), pour
+    poser les points d'arrêt de la vue Source (calcul de tools/dbg.py, sur le
+    .prg : pas besoin de VICE)."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import dbg  # noqa: E402 - module voisin, bibliothèque standard
+    prg = os.path.join(BUILD, prog + ".prg")
+    if not os.path.isfile(prg):
+        return {}
+    info = dbg.DebugInfo(dbgfile)
+    targets = dbg.branch_targets(info, dbg.prg_reader(prg))
+    ranges = collections.defaultdict(list)
+    for start, end, fname, line, typ in info.entries:
+        if fname in lines and line in lines[fname]:
+            ranges[(fname, line)].append((start, end))
+    out = {}
+    for (fname, line), rs in ranges.items():
+        out.setdefault(fname, {})[line] = dbg.line_entries(rs, targets)
+    return out
+
+
 def get_codeinfo(h, q):
     """Correspondance source <-> adresses et segments d'un programme
     (dbg.py lines / segments sur build/<prog>.dbg)."""
@@ -689,7 +740,7 @@ def get_codeinfo(h, q):
             continue
         fname = m.group(1)
         # Seuls les sources du projet sont affichables (route /source/).
-        if not fname.startswith(("src/", "examples/")):
+        if not fname.startswith(tuple(d + "/" for d in SOURCE_DIRS)):
             continue
         if fname not in lines:
             lines[fname] = {}
@@ -703,6 +754,7 @@ def get_codeinfo(h, q):
             segments.append({"name": m.group(1), "start": int(m.group(2), 16),
                              "end": int(m.group(3), 16)})
     h.send_json({"prog": prog, "files": files, "lines": lines, "segments": segments,
+                 "entries": line_entries(prog, dbgfile, lines),
                  "mtime": os.path.getmtime(dbgfile)})
 
 

@@ -203,6 +203,16 @@ def main():
         check(r["rc"] == 0 and "JMP loop" in r["stdout"], "disasm via le portail")
         st, r = dbg("where")
         check("hello.s:38" in r["stdout"], "where via le portail : %s" % r["stdout"].strip())
+        # Points d'entrée : mygame/demo, ligne sprite_move(...) atteinte aussi
+        # par un saut au milieu de la ligne (optimiseur de cc65).
+        st, ci = request("GET", "/api/codeinfo?prog=demo")
+        n_move = next(i for i, l in enumerate(open(os.path.join(ROOT, "mygame/demo/main.c"), encoding="utf-8"), 1)
+                      if "sprite_move(0, ship_x, ship_y);" in l)
+        ent = (ci.get("entries", {}).get("mygame/demo/main.c", {}).get(str(n_move)) if isinstance(ci, dict) else None)
+        check(st == 200 and ent and len(ent) >= 2, "codeinfo : points d'entrée de la ligne %d de demo (%s)" % (n_move, ent))
+        check("libc64/sprite/sprite_move.s" in ci.get("files", []), "codeinfo : sources de libc64 utilisées par demo")
+        st, _ = request("GET", "/source/libc64/sprite/sprite_move.s", raw=True)
+        check(st == 200, "source de libc64 servie")
         st, _ = request("GET", "/api/codeinfo?prog=../x")
         check(st == 400, "codeinfo : nom invalide refusé (%s)" % st)
 

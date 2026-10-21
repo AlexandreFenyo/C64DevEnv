@@ -52,6 +52,7 @@ QUICK_WAIT = 0.5           # s : attente directe d'un arrêt proche (retour de J
 MAX_FRAMES = 12
 ROM_START = 0xA000
 SOURCE_EXTS = (".s", ".c", ".inc", ".h", ".asm")
+PROGRAM_DIRS = ("src", "examples", "mygame")   # SRC_DIRS du Makefile
 CODE_SEGMENTS = dbg.CODE_SEGMENTS
 DATA_SEGMENTS = {"DATA", "BSS", "RODATA", "ZEROPAGE"}
 LOG_PATH = os.path.join(BUILD, "dap.log")
@@ -213,20 +214,27 @@ class Program:
     def loc(self, addr):
         return self.addr_loc.get(addr)
 
-    def line_addrs(self, path, line):
-        """(ligne effective, [adresses]) pour un point d'arrêt sur path:line :
-        la première ligne ≥ line qui a du code (comme gdb)."""
+    def line_ranges(self, path, line):
+        """(ligne effective, [(début, fin)]) pour un point d'arrêt sur
+        path:line : la première ligne ≥ line qui a du code (comme gdb) ;
+        plages contiguës fusionnées."""
         table = self.file_lines.get(os.path.realpath(path), {})
         cands = [ln for ln in table if line <= ln <= line + 50]
         if not cands:
             return None, []
         eff = min(cands)
-        addrs, last_end = [], None
+        ranges = []
         for start, end in sorted(table[eff]):
-            if last_end is None or start > last_end + 1:
-                addrs.append(start)   # plages non contiguës : un point d'arrêt chacune
-            last_end = end if last_end is None else max(last_end, end)
-        return eff, addrs
+            if ranges and start <= ranges[-1][1] + 1:
+                ranges[-1] = (ranges[-1][0], max(ranges[-1][1], end))
+            else:
+                ranges.append((start, end))
+        return eff, ranges
+
+    def line_addrs(self, path, line):
+        """(ligne effective, [début de chaque plage])."""
+        eff, ranges = self.line_ranges(path, line)
+        return eff, [s for s, e in ranges]
 
     def lookup(self, name):
         """Adresse d'un label/symbole : nom exact, _nom (C), puis équivalences."""
@@ -297,6 +305,8 @@ class Session:
         self.done = False
         self.stop_on_entry = False
         self.io_bank = None
+        self.targets = None       # cibles de saut du programme (points d'entrée des lignes)
+        self.src_ranges = {}      # fichier -> plages des lignes portant un point d'arrêt
 
     # --- E/S DAP ---------------------------------------------------------
     def send(self, msg):
@@ -633,7 +643,16 @@ class Session:
             if into and code[0] == 0x20:
                 target = code[1] | (code[2] << 8)
                 if self.prog.loc(target) is not None:
-                    return (yield from self.g_step_instr(True))
+                    stop = yield from self.g_step_instr(True)
+                    if stop:
+                        return stop
+                    # Fonction C : on saute son prologue (jsr pusha/pushax, jsr
+                    # decspN), comme gdb, pour arriver avec les paramètres et
+                    # les locales en place sur la pile C.
+                    f = self.prog.info.function_at(target)
+                    if f and min(s for s, e in self.prog.info.scopes[f[0]]["ranges"]) == target:
+                        return (yield from self.g_step_line(False))
+                    return None
             stop = yield from self.g_step_instr(False)
             if stop:
                 return stop
@@ -726,11 +745,12 @@ class Session:
             return os.path.basename(v)[:-4]
         if os.path.isfile(v) or v.endswith(SOURCE_EXTS):
             rel = os.path.relpath(os.path.realpath(v), os.path.realpath(ROOT)).split(os.sep)
-            if len(rel) >= 3 and rel[0] in ("src", "examples"):
+            if len(rel) >= 3 and rel[0] in PROGRAM_DIRS:
                 return rel[1]
-            if len(rel) == 2 and rel[0] in ("src", "examples"):
+            if len(rel) == 2 and rel[0] in PROGRAM_DIRS:
                 return os.path.splitext(rel[1])[0]
-            raise DapError("%s n'est pas dans src/ ni examples/ : programme inconnu" % v)
+            raise DapError("%s n'est pas dans %s : programme inconnu (fichier de bibliothèque ? "
+                           "ouvrez un source du programme avant F5)" % (v, ", ".join(d + "/" for d in PROGRAM_DIRS)))
         return v
 
     def run_tool(self, argv, what):
@@ -866,13 +886,33 @@ class Session:
         return {"threads": [{"id": THREAD_ID, "name": "6510 (%s)" % (self.prog.name if self.prog else "C64")}]}
 
     def req_continue(self, args, req):
+        self.respond(req, {"allThreadsContinued": True})
+        self.refs.clear()
         with self.vice() as mon:
             self.abort_gen()
-            mon.exit_monitor()
             mon.was_stopped = True
-        self.running = True
-        self.refs.clear()
-        return {"allThreadsContinued": True}
+            if mon.status()["stopped"]:
+                self.start_gen(self.g_continue())
+            else:
+                self.running = True
+        return False
+
+    def g_continue(self):
+        """Reprise. Si l'arrêt est sur une ligne à point d'arrêt, on la quitte
+        d'abord pas à pas : sinon un autre point d'entrée de la même ligne
+        arrêterait aussitôt sur elle (voir dbg.line_entries)."""
+        pc = self.regs()["PC"]
+        rng = next(((s, e) for rs in self.src_ranges.values() for s, e in rs if s <= pc <= e), None)
+        for _ in range(64 if rng else 0):
+            stop = yield from self.g_step_instr(False)
+            if stop:
+                return stop
+            pc = self.regs()["PC"]
+            if not rng[0] <= pc <= rng[1]:
+                break
+        self.mon.exit_monitor()
+        st = yield
+        return self.classify(st)
 
     def req_pause(self, args, req):
         with self.vice() as mon:
@@ -954,18 +994,29 @@ class Session:
             self.bp_sets[key] = new
         return result
 
+    def branch_targets(self):
+        if self.targets is None:
+            with self.vice():
+                self.targets = dbg.branch_targets(self.prog.info, self.mem)
+        return self.targets
+
     def req_setBreakpoints(self, args, req):
         source = args.get("source") or {}
         path = source.get("path", "")
-        specs = []
+        specs, all_ranges = [], []
         for bp in args.get("breakpoints") or [{"line": ln} for ln in args.get("lines", [])]:
-            line, addrs = self.prog.line_addrs(path, int(bp["line"]))
+            line, ranges = self.prog.line_ranges(path, int(bp["line"]))
+            # Tous les points d'entrée de la ligne (sauts de l'optimiseur au
+            # milieu de la ligne compris), pas seulement son début.
+            addrs = dbg.line_entries(ranges, self.branch_targets()) if ranges else []
+            all_ranges += ranges
             if addrs:
                 specs.append((addrs, dbg.OP_EXEC, {"line": line, "source": source,
                                                    "instructionReference": hexaddr(addrs[0])}))
             else:
                 specs.append(([], dbg.OP_EXEC, {"line": bp["line"], "source": source,
                                                 "message": "pas de code à cette ligne (ou programme non compilé)"}))
+        self.src_ranges[os.path.realpath(path)] = all_ranges
         return {"breakpoints": self.replace_bps(("source", os.path.realpath(path)), specs)}
 
     def req_setFunctionBreakpoints(self, args, req):

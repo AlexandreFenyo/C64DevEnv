@@ -1350,6 +1350,57 @@ def cmd_disasm(mon, labels, args):
         addr += size
 
 
+def branch_targets(dbgi, read):
+    """Adresses visées par un branchement relatif, un JMP ou un JSR absolu dans
+    les segments de code du programme. read(début, fin) renvoie les octets
+    (mémoire de VICE ou fichier .prg). Décodage linéaire depuis chaque début
+    de ligne connu (frontières d'instructions sûres)."""
+    targets = set()
+    starts = sorted({s for s, e, f, ln, t in dbgi.entries})
+    for seg_start, seg_end, name in dbgi.segments:
+        if name not in CODE_SEGMENTS:
+            continue
+        mem = read(seg_start, seg_end)
+        seen = set()
+        for a in [s for s in starts if seg_start <= s <= seg_end] or [seg_start]:
+            while seg_start <= a <= seg_end and a not in seen and a - seg_start < len(mem):
+                seen.add(a)
+                op = mem[a - seg_start]
+                if op not in OPCODES:
+                    break
+                mn, mode = OPCODES[op]
+                size = MODE_SIZE[mode]
+                if a + size - 1 > seg_end or a + size - seg_start > len(mem):
+                    break
+                if mode == "rel":
+                    off = mem[a + 1 - seg_start]
+                    targets.add((a + 2 + (off - 256 if off > 127 else off)) & 0xFFFF)
+                elif mode == "abs" and mn in ("JMP", "JSR"):
+                    targets.add(mem[a + 1 - seg_start] | (mem[a + 2 - seg_start] << 8))
+                a += size
+    return targets
+
+
+def line_entries(ranges, targets):
+    """Points d'entrée d'une ligne source : début de chaque plage, plus les
+    cibles de saut situées à l'intérieur. L'optimiseur de cc65 fait parfois
+    sauter au milieu d'une ligne (ex. « lda #0 » sauté quand A vaut déjà 0) :
+    un point d'arrêt sur le seul début de ligne serait alors manqué."""
+    return sorted({s for s, e in ranges} | {t for t in targets for s, e in ranges if s < t <= e})
+
+
+def prg_reader(path):
+    """read(début, fin) sur un fichier .prg (2 octets d'adresse de chargement)."""
+    with open(path, "rb") as f:
+        data = f.read()
+    load = data[0] | (data[1] << 8)
+    body = data[2:]
+
+    def read(start, end):
+        return bytes(body[a - load] if 0 <= a - load < len(body) else 0 for a in range(start, end + 1))
+    return read
+
+
 def decode_at(mem, base, addr, labels, dbgi):
     """Comme decode(), mais les segments de données (RODATA, DATA, en-tête
     BASIC...) donnent des .byte, 8 par ligne au plus, sans dépasser le

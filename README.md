@@ -89,9 +89,16 @@ Panneau Variables : registres (modifiables), locales et globales C avec leur typ
 
 Pour déboguer une instance lancée par `make debug PROG=xxx` ou par le portail (case Moniteur) : configuration « C64 : s'attacher à VICE ». Le portail, `dbg.py` et VS Code pilotent la même instance en même temps.
 
+## Bibliothèque libc64 et jeu (mygame)
+
+- `libc64/` : fonctions réutilisables en C et en assembleur (écran, sprites, manette, son, temps, hasard), une par fichier. `#include "libc64.h"` suffit : un programme n'embarque que les fonctions qu'il appelle. Détails et liste : `libc64/README.md`.
+- `mygame/` : les versions du jeu, une par sous-répertoire ; la première est `mygame/demo` (`make run PROG=demo`, ou `F5` dans VS Code sur `mygame/demo/main.c`).
+
 ## Arborescence
 
 - `src/` : vos programmes (un sous-répertoire par programme, `.s` et/ou `.c`)
+- `libc64/` : bibliothèque de fonctions C64 (C et asm)
+- `mygame/` : versions du jeu (`demo/`…)
 - `examples/` : `hello` (ca65, boucle infinie pour les tests), `hello_rts` (ca65, rend la main au BASIC : idéal pour `make run` et taper des commandes), `hello_c` (cc65), `squares_c` (cc65, pour le pas à pas : fonction, locales, globales), `sprite_sid` (ca65, à suivre dans VS Code : un sprite et une note SID, l'effet de chaque bloc visible dans les groupes VIC-II, Sprites et SID)
 - `tools/` : `install.sh`, `run.sh`, `stop.sh`, `dbg.py`, `mklabels.py`, `portal.py` + `portal/` + `portal.sh` (portail web), `dap.py` + `vscode/` + `vscode-install.sh` (débogage VS Code)
 - `.vscode/` : configurations de débogage et tâches (make) pour VS Code

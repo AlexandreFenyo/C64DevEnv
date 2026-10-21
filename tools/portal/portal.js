@@ -222,7 +222,7 @@ function renderPrograms() {
   const tbody = $("#programs");
   tbody.replaceChildren();
   if (!state.programs.length) {
-    tbody.append(el("tr", {}, el("td", { colspan: 3, class: "muted" }, "Aucun programme (src/ ou examples/)")));
+    tbody.append(el("tr", {}, el("td", { colspan: 3, class: "muted" }, "Aucun programme (src/, examples/ ou mygame/)")));
     return;
   }
   for (const p of state.programs) {
@@ -357,6 +357,17 @@ async function toggleBreakpoint(addr) {
   else await monitorAction("break", ["$" + hex4(addr)], null);
 }
 
+// Ligne source : un point d'arrêt par point d'entrée (l'optimiseur de cc65
+// saute parfois au milieu d'une ligne), retirés ensemble.
+async function toggleLineBreakpoint(addrs) {
+  const bps = addrs.map(execBpAt).filter(Boolean);
+  if (bps.length) {
+    for (const num of [...new Set(bps.map((b) => b.num))]) await monitorAction("delete", [num], null);
+  } else {
+    for (const a of addrs) await monitorAction("break", ["$" + hex4(a)], null);
+  }
+}
+
 const hex2 = (n) => n.toString(16).padStart(2, "0");
 const hex4 = (n) => n.toString(16).padStart(4, "0");
 
@@ -477,6 +488,7 @@ async function renderSource(view) {
   }, f.split("/").pop())));
   const text = await fetchSource(code.file, info.mtime);
   const map = info.lines[code.file] || {};
+  const entries = (info.entries || {})[code.file] || {};
   const rows = [];
   let current = null;
   text.replace(/\n$/, "").split("\n").forEach((src, i) => {
@@ -488,7 +500,7 @@ async function renderSource(view) {
     const parts = src.split(";");
     const txt = el("span", { class: "txt" }, parts[0], parts.length > 1 ? el("span", { class: "cm" }, ";" + parts.slice(1).join(";")) : "");
     const row = el("div", { class: cls, title: range ? `$${hex4(range[0])}-$${hex4(range[1])}` : "" },
-      el("span", { class: "gut", onclick: range ? () => toggleBreakpoint(range[0]) : null }, range ? "●" : ""),
+      el("span", { class: "gut", onclick: range ? () => toggleLineBreakpoint(entries[n] || [range[0]]) : null }, range ? "●" : ""),
       el("span", { class: "ln num" }, String(n)), txt);
     if (isCur) current = row;
     rows.push(row);
