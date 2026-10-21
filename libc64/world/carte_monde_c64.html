@@ -1,0 +1,3700 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Carte du monde C64 — 10×6 écrans en tiles</title>
+<style>
+  body {
+    font-family: monospace;
+    background: #222;
+    color: #eee;
+    margin: 0;
+    padding: 20px;
+  }
+  h1 { font-size: 20px; color: #fff; border-bottom: 1px solid #555; padding-bottom: 6px; }
+  .config {
+    background: #1a1a1a;
+    padding: 12px 15px;
+    border-radius: 6px;
+    margin: 15px 0;
+    font-size: 13px;
+    line-height: 1.7;
+  }
+  .config strong { color: #fc6; }
+  .note {
+    background: #2a2a44;
+    padding: 10px 15px;
+    border-left: 3px solid #69f;
+    margin: 15px 0;
+    font-size: 13px;
+  }
+  .controls {
+    margin: 12px 0;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+    font-size: 13px;
+  }
+  .controls button {
+    background: #333;
+    color: #eee;
+    border: 1px solid #666;
+    padding: 6px 14px;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .controls button:hover { background: #444; }
+  .controls button.actif { background: #06c; border-color: #39f; }
+  #wrapper {
+    position: relative;
+    overflow: auto;
+    border: 2px solid #555;
+    background: #000;
+    max-height: 82vh;
+  }
+  #wrapper canvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+  #gridCanvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+  }
+  #loupe {
+    position: fixed;
+    pointer-events: none;
+    border: 2px solid #f66;
+    background: #000;
+    display: none;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.7);
+    z-index: 10;
+  }
+  .legende {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    margin: 10px 0;
+    font-size: 12px;
+    color: #ccc;
+  }
+  .legende span { display: flex; align-items: center; gap: 6px; }
+  .pastille { width: 14px; height: 14px; border: 1px solid #666; display: inline-block; }
+</style>
+</head>
+<body>
+
+<h1>🗺️ Carte du monde C64 — 10×6 écrans (400×150 tiles)</h1>
+
+<div class="config">
+  Carte assemblée <strong>uniquement avec les tiles du jeu</strong> ($40-$FB), selon la carte de référence
+  <strong>carte_monde_v2.html</strong>. Chaque écran C64 fait <strong>40×25 tiles</strong> (320×200 pixels) ;
+  le monde complet fait <strong>10×6 écrans</strong> = 3200×1200 pixels.
+  Chaque cellule = un code Screen RAM + une Color RAM, comme sur le vrai C64.
+</div>
+
+<div class="legende">
+  <span><span class="pastille" style="background:#9ad284"></span>Campagne (herbe damier)</span>
+  <span><span class="pastille" style="background:#588d43"></span>Forêts (3 types d'arbres)</span>
+  <span><span class="pastille" style="background:#70a4b2"></span>Rivière + lac (tiles lac)</span>
+  <span><span class="pastille" style="background:#444"></span>Routes (principales à tirets, secondaires, simples)</span>
+  <span><span class="pastille" style="background:#b8c76f"></span>Champs de blé</span>
+  <span><span class="pastille" style="background:#68372b"></span>Villes, villages, sièges IA (enclos + logo 3×3)</span>
+</div>
+
+<div class="controls">
+  <strong>Zoom :</strong>
+  <button id="btnFit" class="actif">Ajusté</button>
+  <button id="btn100">100%</button>
+  <button id="btn200">200%</button>
+  <label><input type="checkbox" id="chkGrid" checked> Grille des écrans (10×6)</label>
+  <span style="color:#888">— survolez la carte pour la loupe ×4</span>
+</div>
+
+<div id="wrapper">
+  <canvas id="mapCanvas" width="3200" height="1200"></canvas>
+  <canvas id="gridCanvas" width="3200" height="1200"></canvas>
+</div>
+<canvas id="loupe" width="256" height="256"></canvas>
+
+<div class="note">
+  <strong>Contenu :</strong> 2 villes (Rouen, Mont-Saint-Aignan), 5 villages (Darnetal, Sotteville,
+  Bois-Guillaume, Maromme, Notre-Dame-de-Bondeville), Gare Centrale + Gare Sud, caserne de pompiers,
+  hôpital, 6 sièges sociaux IA parodiques en cul-de-sac (Gogle, ClosAI, Gwen, Pomme, LeCat, Grok —
+  enclos 32×16 abritant chacun un grand immeuble 28×7, accès barrés de panneaux sens interdit),
+  une mairie au fronton tricolore près de chaque ville, un grand immeuble à côté de chaque parking.
+  Le fleuve traverse la carte de bord en bord (sans liseré de rive aux bords de carte) et reste
+  <strong>infranchissable</strong> comme le lac : les routes s'arrêtent sur les rives. Règles d'urbanisme :
+  aucun bâtiment ni nom de ville ne touche l'eau, les bâtiments ne se touchent pas entre eux, les
+  parkings ne touchent pas les bâtiments, les lisières des forêts sont irrégulières. Plans d'eau
+  secondaires : piscine de la caserne, piscine de la ferme de l'écran (8,3), piscine en L à
+  Notre-Dame-de-Bondeville, lac « banane » au-dessus de la Gare Centrale et lac « haricot » à Sotteville.
+</div>
+
+<script>
+// ============================================
+// Définitions des tiles
+// ============================================
+
+// Tile $40 : Herbe damier - MODE STANDARD
+// bit 0 = vert clair ($D021), bit 1 = Color RAM (vert foncé)
+// Damier avec carrés de 2×2 pixels
+const TILE_40_HERBE = [
+  0b11001100,
+  0b11001100,
+  0b00110011,
+  0b00110011,
+  0b11001100,
+  0b11001100,
+  0b00110011,
+  0b00110011
+];
+
+// Tile $41 : Route horizontale - MULTICOLORE
+// 00 = vert clair (fond, à éviter dans ce tile)
+// 01 = gris ($D022) = bitume
+// 10 = blanc ($D023) = marquage
+// 11 = Color RAM (libre)
+// Tirets horizontaux : 2 pixels MC de large (4 px physiques) × 2 lignes
+const TILE_41_ROUTE_H = [
+  0b01010101, // bitume plein
+  0b01010101,
+  0b01010101,
+  0b01101001, // tiret blanc au centre
+  0b01101001,
+  0b01010101,
+  0b01010101,
+  0b01010101
+];
+
+// Tile $42 : Route verticale simple - MULTICOLORE
+// Bitume uniforme, pas de marquages
+const TILE_42_ROUTE_V = [
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101
+];
+
+// Tile $43 : Panneau STOP - MULTICOLORE
+// 00 = vert clair (herbe autour)
+// 10 = blanc ($D023) = barre centrale
+// 11 = rouge (Color RAM) = disque
+const TILE_43_STOP = [
+  0b00111100,
+  0b11111111,
+  0b11111111,
+  0b10101010,
+  0b10101010,
+  0b11111111,
+  0b11111111,
+  0b00111100
+];
+
+// Tile $44 : Poteau - MULTICOLORE
+// 00 = vert clair (herbe autour)
+// 01 = gris ($D022) = poteau
+const TILE_44_POTEAU = [
+  0b00010100,
+  0b00010100,
+  0b00010100,
+  0b00010100,
+  0b00010100,
+  0b00010100,
+  0b00010100,
+  0b00000000
+];
+
+// Tile $45 : Route double verticale - côté GAUCHE - MULTICOLORE
+// Trait blanc continu sur le bord gauche, bitume à droite
+// Paires : 10 01 01 01 = %10010101
+const TILE_45_ROUTE_VG = [
+  0b10010101,
+  0b10010101,
+  0b10010101,
+  0b10010101,
+  0b10010101,
+  0b10010101,
+  0b10010101,
+  0b10010101
+];
+
+// Tile $46 : Route double verticale - côté DROIT - MULTICOLORE
+// Bitume à gauche, trait blanc continu sur le bord droit
+// Paires : 01 01 01 10 = %01010110
+const TILE_46_ROUTE_VD = [
+  0b01010110,
+  0b01010110,
+  0b01010110,
+  0b01010110,
+  0b01010110,
+  0b01010110,
+  0b01010110,
+  0b01010110
+];
+
+// Tile $47 : Route double horizontale - partie HAUTE - MULTICOLORE
+// Trait blanc continu sur la ligne du haut, bitume en dessous
+const TILE_47_ROUTE_HH = [
+  0b10101010, // ligne 0 : tout blanc
+  0b01010101, // bitume
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101
+];
+
+// Tile $48 : Route double horizontale - partie BASSE - MULTICOLORE
+// Bitume en haut, trait blanc continu sur la ligne du bas
+const TILE_48_ROUTE_HB = [
+  0b01010101, // bitume
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b10101010  // ligne 7 : tout blanc
+];
+
+// Tile $49 : Bitume avec DEMI-TIRET EN BAS (moitié supérieure d'un tiret)
+// Tiret très aplati : 1 ligne blanche en bas seulement
+const TILE_49_ROUTE_TIRET_HAUT = [
+  0b01010101, // bitume
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b10101010  // 1 ligne blanche
+];
+
+// Tile $4A : Bitume avec DEMI-TIRET EN HAUT (moitié inférieure d'un tiret)
+const TILE_4A_ROUTE_TIRET_BAS = [
+  0b10101010, // 1 ligne blanche
+  0b01010101, // bitume
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101
+];
+
+// Tile $4B : Bitume avec DEMI-TIRET À DROITE (moitié gauche d'un tiret vertical central)
+// Les 2 pixels MC de droite sont blancs sur toute la hauteur
+// Paires : 01 01 01 10 = %01010110
+const TILE_4B_TIRET_GAUCHE = [
+  0b01010110,
+  0b01010110,
+  0b01010110,
+  0b01010110,
+  0b01010110,
+  0b01010110,
+  0b01010110,
+  0b01010110
+];
+
+// Tile $4C : Bitume avec DEMI-TIRET À GAUCHE (moitié droite d'un tiret vertical central)
+// Les 2 pixels MC de gauche sont blancs sur toute la hauteur
+// Paires : 10 01 01 01 = %10010101
+const TILE_4C_TIRET_DROITE = [
+  0b10010101,
+  0b10010101,
+  0b10010101,
+  0b10010101,
+  0b10010101,
+  0b10010101,
+  0b10010101,
+  0b10010101
+];
+
+// Tile $4D : Tile vide (tous bits à 0) - MODE STANDARD
+// Affiche la couleur de fond $D021 sur tous les pixels
+const TILE_4D_VIDE = [
+  0, 0, 0, 0, 0, 0, 0, 0
+];
+
+// Tile $4E : Tile plein (tous bits à 1) - MODE STANDARD
+// Affiche la couleur Color RAM sur tous les pixels
+const TILE_4E_PLEIN = [
+  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+];
+
+// Tile $4F : Toit - pente GAUCHE (monte vers la droite) - MODE STANDARD
+// bit 0 = fond (vert clair), bit 1 = Color RAM = rouge
+const TILE_4F_TOIT_PENTE_G = [
+  0b00000000,
+  0b00000001,
+  0b00000011,
+  0b00000111,
+  0b00001111,
+  0b00011111,
+  0b00111111,
+  0b01111111
+];
+
+// Tile $50 : Toit - pente DROITE (descend vers la droite) - MODE STANDARD
+const TILE_50_TOIT_PENTE_D = [
+  0b00000000,
+  0b10000000,
+  0b11000000,
+  0b11100000,
+  0b11110000,
+  0b11111000,
+  0b11111100,
+  0b11111110
+];
+
+// Tile $51 : Toit - intérieur plein (entre les 2 pentes) - MODE STANDARD
+// Color RAM = rouge : tous pixels rouges
+const TILE_51_TOIT_PLEIN = [
+  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
+];
+
+// Tile $52 : Mur béton plein - MODE MULTICOLORE (Color RAM libre)
+// 00 = vert clair (fond, non utilisé), 01 = gris ($D022 = béton)
+// Tout en 01 = gris pur
+const TILE_52_MUR_BETON = [
+  0b01010101, 0b01010101, 0b01010101, 0b01010101,
+  0b01010101, 0b01010101, 0b01010101, 0b01010101
+];
+
+// Tile $53 : Mur avec fenêtre cyan cadrée blanc - MODE MULTICOLORE (Color RAM = cyan)
+// 00 = vert clair (non utilisé), 01 = gris (mur), 10 = blanc (cadre), 11 = cyan (vitre)
+const TILE_53_FENETRE_CYAN = [
+  0b01010101, // mur
+  0b01010101, // mur
+  0b01101001, // cadre haut (gris|blanc|blanc|gris)
+  0b01101101, // gris|blanc|cyan|gris
+  0b01101101,
+  0b01101001, // cadre bas
+  0b01010101, // mur
+  0b01010101  // mur
+];
+
+// Tile $54 : Mur avec porte noire - MODE MULTICOLORE (Color RAM = noir)
+// 00 = vert clair (non utilisé), 01 = gris, 10 = blanc (cadre), 11 = noir (porte)
+const TILE_54_PORTE_NOIRE = [
+  0b01010101, // mur
+  0b01010101, // mur
+  0b01010101, // mur
+  0b01101001, // cadre supérieur porte
+  0b01111101, // porte noire
+  0b01111101,
+  0b01111101,
+  0b01111101
+];
+
+// Tile $55 : Cheminée (au-dessus du toit) - MODE MULTICOLORE (Color RAM libre)
+// 00 = vert clair (ciel), 01 = gris (cheminée), 10 = blanc (sommet)
+// Cheminée à gauche du tile, partie inférieure
+const TILE_55_CHEMINEE = [
+  0b00000000, // ciel
+  0b00000000, // ciel
+  0b00100000, // sommet blanc
+  0b00010000, // cheminée grise
+  0b00010000,
+  0b00010000,
+  0b00010000,
+  0b00010000  // touche le toit en dessous
+];
+
+// Tile $56 : Fenêtre BLANCHE (pour immeubles) - MODE MULTICOLORE
+// 00=vert clair (non utilisé), 01=gris (mur), 10=blanc (fenêtre)
+// Rectangle blanc (2 pixels MC × 4 lignes) centré sur mur gris
+const TILE_56_FENETRE_BLANCHE = [
+  0b01010101,  // mur
+  0b01010101,  // mur
+  0b01101001,  // mur|BLANC|BLANC|mur
+  0b01101001,
+  0b01101001,
+  0b01101001,
+  0b01010101,  // mur
+  0b01010101   // mur
+];
+
+// Tile $57 : Toit ÉTUDIÉ d'immeuble - MODE MULTICOLORE (Color RAM = noir)
+// 00=vert clair, 01=gris, 10=blanc, 11=noir
+// Ligne 0-1 : double rebord blanc (épaisseur 2 px)
+// Ligne 2-5 : façade grise du toit
+// Ligne 6   : ligne noire fine (démarcation toit/étage)
+// Ligne 7   : mur gris
+const TILE_57_TOIT_ETUDIE = [
+  0b10101010,  // blanc
+  0b10101010,  // blanc
+  0b01010101,  // gris
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b11111111,  // ligne noire (Color RAM)
+  0b01010101   // gris
+];
+
+// Tile $58 : Antenne TV SIMPLE - MODE MULTICOLORE
+// 00=vert clair (ciel), 01=gris (antenne)
+// Poteau vertical centré (1 pixel MC de large)
+const TILE_58_ANTENNE_SIMPLE = [
+  0b00010000,
+  0b00010000,
+  0b00010000,
+  0b00010000,
+  0b00010000,
+  0b00010000,
+  0b00010000,
+  0b00010000
+];
+
+// Tile $59 : Antenne TV RÂTEAU - MODE MULTICOLORE
+// 00=vert clair (ciel), 01=gris (antenne et traverses)
+// Poteau vertical + traverses horizontales
+const TILE_59_ANTENNE_RATEAU = [
+  0b00010000,  // haut du poteau
+  0b01010100,  // petite traverse (3 paires grises)
+  0b00010000,  // poteau
+  0b01010101,  // traverse large (4 paires)
+  0b00010000,  // poteau
+  0b01010101,  // traverse large
+  0b00010000,  // poteau
+  0b00010000   // poteau (touche le toit)
+];
+
+// ============================================
+// FEU TRICOLORE (feu à la française)
+// 2 tiles empilés : HAUT (3 lampes) + BAS (fin vert + poteau)
+// 4 variantes HAUT + 2 variantes BAS pour animer le feu
+// MC : 00=vert clair, 01=gris, 10=blanc, 11=Color RAM
+// ============================================
+
+// Tile $5A : Feu HAUT - éteint (3 lampes grises)
+const TILE_5A_FEU_HAUT_ETEINT = [
+  0b00101000,  // . W W .   bord haut
+  0b00010100,  // . G G .   rouge éteinte
+  0b00010100,
+  0b00101000,  // . W W .   séparateur
+  0b00010100,  // . G G .   orange éteinte
+  0b00010100,
+  0b00101000,  // . W W .   séparateur
+  0b00010100   // . G G .   début vert éteinte
+];
+
+// Tile $5B : Feu HAUT - ROUGE allumée (Color RAM = rouge)
+const TILE_5B_FEU_HAUT_ROUGE = [
+  0b00101000,  // . W W .
+  0b00111100,  // . R R .   rouge allumée
+  0b00111100,
+  0b00101000,  // . W W .
+  0b00010100,  // . G G .   orange éteinte
+  0b00010100,
+  0b00101000,
+  0b00010100   // début vert éteinte
+];
+
+// Tile $5C : Feu HAUT - ORANGE allumée (Color RAM = jaune)
+const TILE_5C_FEU_HAUT_ORANGE = [
+  0b00101000,
+  0b00010100,  // rouge éteinte
+  0b00010100,
+  0b00101000,
+  0b00111100,  // . O O .   orange allumée
+  0b00111100,
+  0b00101000,
+  0b00010100   // début vert éteinte
+];
+
+// Tile $5D : Feu HAUT - VERT allumée début (Color RAM = vert foncé)
+const TILE_5D_FEU_HAUT_VERT = [
+  0b00101000,
+  0b00010100,  // rouge éteinte
+  0b00010100,
+  0b00101000,
+  0b00010100,  // orange éteinte
+  0b00010100,
+  0b00101000,
+  0b00111100   // . V V .   début vert allumée
+];
+
+// Tile $5E : Feu BAS - éteint (fin vert grise + poteau)
+// Dernière ligne en vert clair (pas de poteau)
+const TILE_5E_FEU_BAS_ETEINT = [
+  0b00010100,  // . G G .   fin vert éteinte
+  0b00101000,  // . W W .   bord bas du boîtier
+  0b00000100,  // . . P .   poteau
+  0b00000100,
+  0b00000100,
+  0b00000100,
+  0b00000100,
+  0b00000000   // . . . .   vert clair uni
+];
+
+// Tile $5F : Feu BAS - VERT allumée (fin + poteau, Color RAM = vert foncé)
+const TILE_5F_FEU_BAS_VERT = [
+  0b00111100,  // . V V .   fin vert allumée
+  0b00101000,  // . W W .
+  0b00000100,  // . . P .
+  0b00000100,
+  0b00000100,
+  0b00000100,
+  0b00000100,
+  0b00000000   // . . . .
+];
+
+// ============================================
+// TILES AQUATIQUES - MODE MULTICOLORE
+// Utilisés pour les piscines et les lacs
+// Palette : 00 = vert clair (herbe), 01 = gris (non utilisé), 10 = blanc (vague/rive), 11 = cyan (Color RAM)
+// ============================================
+
+// Tile $60 : Eau pleine (cyan avec 2 vagues blanches)
+const TILE_60_EAU = [
+  0b11111111,  // E E E E
+  0b11101111,  // E W E E   (vague à gauche)
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111110,  // E E E W   (vague à droite)
+  0b11111111,
+  0b11111111
+];
+
+// ============================================
+// PISCINES : bords et coins en L droit (rive au milieu du tile)
+// ============================================
+
+// Tile $61 : Bord haut piscine (herbe en haut, eau en bas)
+const TILE_61_PISC_BORD_H = [
+  0b00000000,  // herbe
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b10101010,  // rive horizontale row 4
+  0b11111111,  // eau
+  0b11111111,
+  0b11111111
+];
+
+// Tile $62 : Bord bas piscine
+const TILE_62_PISC_BORD_B = [
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b10101010,  // rive row 3
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000
+];
+
+// Tile $63 : Bord gauche piscine (rive verticale à paire 1)
+const TILE_63_PISC_BORD_G = [
+  0b00101111, 0b00101111, 0b00101111, 0b00101111,
+  0b00101111, 0b00101111, 0b00101111, 0b00101111
+];
+
+// Tile $64 : Bord droit piscine (rive verticale à paire 2)
+const TILE_64_PISC_BORD_D = [
+  0b11111000, 0b11111000, 0b11111000, 0b11111000,
+  0b11111000, 0b11111000, 0b11111000, 0b11111000
+];
+
+// Tile $65 : Piscine coin convexe NO (L droit)
+const TILE_65_PISC_COIN_NO = [
+  0b00000000,  // herbe
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00101010,  // . W W W   angle
+  0b00101111,  // . W E E   rive verticale
+  0b00101111,
+  0b00101111
+];
+
+// Tile $66 : Piscine coin convexe NE
+const TILE_66_PISC_COIN_NE = [
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b10101000,  // W W W .
+  0b11111000,  // E E W .
+  0b11111000,
+  0b11111000
+];
+
+// Tile $67 : Piscine coin convexe SO
+const TILE_67_PISC_COIN_SO = [
+  0b00101111,
+  0b00101111,
+  0b00101111,
+  0b00101010,  // . W W W
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000
+];
+
+// Tile $68 : Piscine coin convexe SE
+const TILE_68_PISC_COIN_SE = [
+  0b11111000,
+  0b11111000,
+  0b11111000,
+  0b10101000,  // W W W .
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000
+];
+
+// Tile $69 : Piscine concave NO (angle rentrant L)
+const TILE_69_PISC_CONC_NO = [
+  0b00101111,  // . W E E
+  0b00101111,
+  0b00101111,
+  0b00101111,
+  0b10101111,  // W W E E (angle)
+  0b11111111,
+  0b11111111,
+  0b11111111
+];
+
+// Tile $6A : Piscine concave NE
+const TILE_6A_PISC_CONC_NE = [
+  0b11111000,
+  0b11111000,
+  0b11111000,
+  0b11111000,
+  0b11111010,  // E E W W
+  0b11111111,
+  0b11111111,
+  0b11111111
+];
+
+// Tile $6B : Piscine concave SO
+const TILE_6B_PISC_CONC_SO = [
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b10101111,  // W W E E
+  0b00101111,
+  0b00101111,
+  0b00101111,
+  0b00101111
+];
+
+// Tile $6C : Piscine concave SE
+const TILE_6C_PISC_CONC_SE = [
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111010,  // E E W W
+  0b11111000,
+  0b11111000,
+  0b11111000,
+  0b11111000
+];
+
+// ============================================
+// LACS : rives en bord de tile (2 pixels d'épaisseur horizontal)
+// ============================================
+
+// Tile $6D : Lac bord haut (rive rows 0-1)
+const TILE_6D_LAC_BORD_H = [
+  0b10101010,  // rive row 0
+  0b10101010,  // rive row 1 (doublée)
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111
+];
+
+// Tile $6E : Lac bord bas (rive rows 6-7)
+const TILE_6E_LAC_BORD_B = [
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b10101010,
+  0b10101010
+];
+
+// Tile $6F : Lac bord gauche (rive paire 0)
+const TILE_6F_LAC_BORD_G = [
+  0b10111111, 0b10111111, 0b10111111, 0b10111111,
+  0b10111111, 0b10111111, 0b10111111, 0b10111111
+];
+
+// Tile $70 : Lac bord droit (rive paire 3)
+const TILE_70_LAC_BORD_D = [
+  0b11111110, 0b11111110, 0b11111110, 0b11111110,
+  0b11111110, 0b11111110, 0b11111110, 0b11111110
+];
+
+// Tile $71 : Lac coin convexe NO (arrondi en diagonale, rive horizontale doublée)
+const TILE_71_LAC_NO = [
+  0b00001010,  // . . W W   (rive haute row 0)
+  0b00001010,  // . . W W   (doublée)
+  0b00101011,  // . W W E
+  0b00101111,  // . W E E
+  0b10111111,  // W E E E   (rive verticale à gauche)
+  0b10111111,
+  0b10111111,
+  0b10111111
+];
+
+// Tile $72 : Lac coin convexe NE
+const TILE_72_LAC_NE = [
+  0b10100000,
+  0b10100000,
+  0b11101000,
+  0b11111000,
+  0b11111110,
+  0b11111110,
+  0b11111110,
+  0b11111110
+];
+
+// Tile $73 : Lac coin convexe SO
+const TILE_73_LAC_SO = [
+  0b10111111,
+  0b10111111,
+  0b10111111,
+  0b10111111,
+  0b00101111,
+  0b00101011,
+  0b00001010,
+  0b00001010
+];
+
+// Tile $74 : Lac coin convexe SE
+const TILE_74_LAC_SE = [
+  0b11111110,
+  0b11111110,
+  0b11111110,
+  0b11111110,
+  0b11111000,
+  0b11101000,
+  0b10100000,
+  0b10100000
+];
+
+// Tile $75 : Lac concave NO (carré blanc 2×2 dans le coin haut-gauche)
+const TILE_75_LAC_CONC_NO = [
+  0b10111111,  // W E E E
+  0b10111111,  // W E E E
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111
+];
+
+// Tile $76 : Lac concave NE
+const TILE_76_LAC_CONC_NE = [
+  0b11111110,
+  0b11111110,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111
+];
+
+// Tile $77 : Lac concave SO
+const TILE_77_LAC_CONC_SO = [
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b10111111,
+  0b10111111
+];
+
+// Tile $78 : Lac concave SE
+const TILE_78_LAC_CONC_SE = [
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111110,
+  0b11111110
+];
+
+// ============================================
+// TILES FORÊT
+// 3 designs d'arbres + 4 tiles damier-coin pour les clairières
+// Mode MC pour les arbres : 00=vert clair, 01=gris (tronc), 10=blanc (reflet), 11=Color RAM (feuilles)
+// Mode standard pour les damier-coin : 0=vert clair, 1=vert foncé (Color RAM)
+// ============================================
+
+// Tile $79 : Arbre rond (chêne) - feuillage circulaire, tronc court
+// Feuilles = Color RAM (jaune ou vert foncé selon la scène)
+const TILE_79_ARBRE_ROND = [
+  0b00111100,  // . F F .
+  0b11111111,  // F F F F
+  0b11101111,  // F W F F
+  0b11111111,  // F F F F
+  0b00111100,  // . F F .
+  0b00000100,  // . . T .
+  0b00000100,  // . . T .
+  0b00000000
+];
+
+// Tile $7A : Arbre conique (sapin/peuplier) - pointe en haut, base large
+const TILE_7A_ARBRE_CONIQUE = [
+  0b00001100,  // . . F .
+  0b00111111,  // . F F F
+  0b11111111,  // F F F F
+  0b00111011,  // . F W F
+  0b00111111,  // . F F F
+  0b00001100,  // . . F .
+  0b00000100,  // . . T .
+  0b00000000
+];
+
+// Tile $7B : Arbre touffu - feuillage large et dense
+const TILE_7B_ARBRE_TOUFFU = [
+  0b00111100,  // . F F .
+  0b11111111,  // F F F F
+  0b11111111,  // F F F F
+  0b11101011,  // F W W F
+  0b11111111,  // F F F F
+  0b00111100,  // . F F .
+  0b00010100,  // . T T .
+  0b00000000
+];
+
+// Tiles damier-coin ($7C-$7F) pour arrondir les clairières
+// Mode standard : 0=vert clair, 1=vert foncé (Color RAM=vert foncé)
+// Le motif damier est conservé dans la zone "damier" du tile et remplacé
+// par du vert clair dans l'autre moitié (escalier diagonal).
+
+// Tile $7C : Damier coin NO (damier en haut-gauche)
+const TILE_7C_DAMIER_NO = [
+  0b11001100,  // damier full
+  0b11001100,
+  0b00110000,  // damier cols 0-5
+  0b00110000,
+  0b11000000,  // damier cols 0-3
+  0b11000000,
+  0b00000000,  // damier cols 0-1 (que des 0 pour ce motif)
+  0b00000000
+];
+
+// Tile $7D : Damier coin NE (damier en haut-droite)
+const TILE_7D_DAMIER_NE = [
+  0b11001100,
+  0b11001100,
+  0b00001100,  // damier cols 2-7
+  0b00001100,
+  0b00001100,  // damier cols 4-7, motif 11001100 : 1100 = 0b00001100
+  0b00001100,
+  0b00000011,  // damier cols 6-7, motif 00110011 : 11 = 0b00000011
+  0b00000011
+];
+
+// Tile $7E : Damier coin SO (damier en bas-gauche)
+const TILE_7E_DAMIER_SO = [
+  0b11000000,  // damier cols 0-1
+  0b11000000,
+  0b00110000,  // damier cols 0-3
+  0b00110000,
+  0b11001100,  // damier cols 0-5
+  0b11001100,
+  0b00110011,  // damier full
+  0b00110011
+];
+
+// Tile $7F : Damier coin SE (damier en bas-droite)
+const TILE_7F_DAMIER_SE = [
+  0b00000000,  // damier cols 6-7 motif 11001100 = 00
+  0b00000000,
+  0b00000011,  // damier cols 4-7 motif 00110011 = 0011
+  0b00000011,
+  0b00001100,  // damier cols 2-7 motif 11001100 = 001100
+  0b00001100,
+  0b00110011,  // damier full
+  0b00110011
+];
+
+// ============================================
+// TILES GARAGE (grande porte pour véhicules, 2×2 tiles = 16×16 pixels)
+// Mode MC : 00=vert clair (non utilisé), 01=gris (mur béton),
+//           10=blanc (cadre du garage), 11=Color RAM=noir (ouverture)
+// ============================================
+
+// Tile $80 : Garage haut-gauche
+// Row 0 : mur                    = M M M M = 0b01010101
+// Row 1 : cadre haut             = M W W W = 0b01101010
+// Rows 2-7 : mur + cadre G + int = M W N N = 0b01101111
+const TILE_80_GARAGE_HG = [
+  0b01010101,  // M M M M   (mur au-dessus du garage)
+  0b01101010,  // M W W W   (cadre haut blanc)
+  0b01101111,  // M W N N   (mur | cadre G | intérieur noir)
+  0b01101111,
+  0b01101111,
+  0b01101111,
+  0b01101111,
+  0b01101111
+];
+
+// Tile $81 : Garage haut-droit (miroir horizontal de $80)
+// Row 0 : M M M M = 0b01010101
+// Row 1 : W W W M = 0b10101001
+// Rows 2-7 : N N W M = 0b11111001
+const TILE_81_GARAGE_HD = [
+  0b01010101,  // M M M M
+  0b10101001,  // W W W M   (cadre haut blanc)
+  0b11111001,  // N N W M   (intérieur | cadre D | mur)
+  0b11111001,
+  0b11111001,
+  0b11111001,
+  0b11111001,
+  0b11111001
+];
+
+// Tile $82 : Garage bas-gauche (bord gauche uniquement, pas de cadre bas)
+// Le noir descend jusqu'au sol (comme une porte ouverte)
+const TILE_82_GARAGE_BG = [
+  0b01101111,  // M W N N   (toute la hauteur : mur | cadre gauche | intérieur noir)
+  0b01101111,
+  0b01101111,
+  0b01101111,
+  0b01101111,
+  0b01101111,
+  0b01101111,
+  0b01101111
+];
+
+// Tile $83 : Garage bas-droit (bord droit uniquement, pas de cadre bas)
+const TILE_83_GARAGE_BD = [
+  0b11111001,  // N N W M   (toute la hauteur)
+  0b11111001,
+  0b11111001,
+  0b11111001,
+  0b11111001,
+  0b11111001,
+  0b11111001,
+  0b11111001
+];
+
+// Tile $84 : Garage haut-milieu (cadre haut, pas de bords latéraux)
+const TILE_84_GARAGE_HM = [
+  0b01010101,  // M M M M   (mur au-dessus du garage)
+  0b10101010,  // W W W W   (cadre blanc haut sur toute la largeur)
+  0b11111111,  // N N N N   (intérieur noir plein)
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111
+];
+
+// Tile $85 : Garage bas-milieu (intérieur noir plein, pas de cadre)
+const TILE_85_GARAGE_BM = [
+  0b11111111,  // N N N N   (toute la hauteur noire, comme le bas d'une porte)
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111
+];
+
+// Tile $86 : Logo Croix-Rouge 2x2 tiles - HAUT-GAUCHE
+// Un grand logo occupe 16×16 pixels (2×2 tiles). Chaque tile est un quart.
+// Mode MC : 00=vert clair (non utilisé), 01=gris (non utilisé),
+//           10=blanc (croix), 11=Color RAM=rouge (carré)
+// HG : rows 0-5 = carré rouge à gauche, rows 6-7 = début barre horizontale blanche
+//      paire 3 devient blanc dès row 3 pour commencer la barre verticale centrale
+const TILE_86_CROIX_HG = [
+  0b11111111,  // R R R R
+  0b11111111,  // R R R R
+  0b11111111,  // R R R R
+  0b11111110,  // R R R W   (début barre verticale)
+  0b11111110,  // R R R W
+  0b11111110,  // R R R W
+  0b10101010,  // W W W W   (barre horizontale)
+  0b10101010   // W W W W
+];
+
+// Tile $87 : Logo Croix-Rouge 2x2 - HAUT-DROIT (miroir horizontal de HG)
+const TILE_87_CROIX_HD = [
+  0b11111111,  // R R R R
+  0b11111111,
+  0b11111111,
+  0b10111111,  // W R R R   (début barre verticale, moitié droite)
+  0b10111111,
+  0b10111111,
+  0b10101010,  // W W W W   (barre horizontale)
+  0b10101010
+];
+
+// Tile $88 : Logo Croix-Rouge 2x2 - BAS-GAUCHE (miroir vertical de HG)
+const TILE_88_CROIX_BG = [
+  0b10101010,  // W W W W   (suite barre horizontale)
+  0b10101010,
+  0b11111110,  // R R R W   (suite barre verticale)
+  0b11111110,
+  0b11111110,
+  0b11111111,  // R R R R
+  0b11111111,
+  0b11111111
+];
+
+// Tile $89 : Logo Croix-Rouge 2x2 - BAS-DROIT (miroir des deux)
+const TILE_89_CROIX_BD = [
+  0b10101010,  // W W W W
+  0b10101010,
+  0b10111111,  // W R R R
+  0b10111111,
+  0b10111111,
+  0b11111111,
+  0b11111111,
+  0b11111111
+];
+
+// ============================================
+// JEU DE CARACTÈRES : 26 glyphes (A-Z) en mode standard
+// Style géométrique angulaire, traits de 2 pixels d'épaisseur
+// Chaque glyphe occupe 7 colonnes (0-6), col 7 = séparateur vide
+// 8 rows de haut (colle au haut et au bas, pas d'interligne)
+// Mode standard : bit 0 = fond, bit 1 = Color RAM (couleur de la lettre)
+// Codes : $90 (A) → $A9 (Z)
+// ============================================
+
+const TILE_90_A = [
+  0b00110000,
+  0b01111000,
+  0b11001100,
+  0b11001100,
+  0b11111100,
+  0b11001100,
+  0b11001100,
+  0b11001100
+];
+
+const TILE_91_B = [
+  0b11111000,
+  0b11001100,
+  0b11001100,
+  0b11111000,
+  0b11001100,
+  0b11001100,
+  0b11001100,
+  0b11111000
+];
+
+const TILE_92_C = [
+  0b01111100,
+  0b11000000,
+  0b11000000,
+  0b11000000,
+  0b11000000,
+  0b11000000,
+  0b11000000,
+  0b01111100
+];
+
+const TILE_93_D = [
+  0b11111000,
+  0b11001100,
+  0b11001100,
+  0b11001100,
+  0b11001100,
+  0b11001100,
+  0b11001100,
+  0b11111000
+];
+
+const TILE_94_E = [
+  0b11111100,
+  0b11000000,
+  0b11000000,
+  0b11110000,
+  0b11110000,
+  0b11000000,
+  0b11000000,
+  0b11111100
+];
+
+const TILE_95_F = [
+  0b11111100,
+  0b11000000,
+  0b11000000,
+  0b11110000,
+  0b11110000,
+  0b11000000,
+  0b11000000,
+  0b11000000
+];
+
+const TILE_96_G = [
+  0b01111100,
+  0b11000000,
+  0b11000000,
+  0b11001110,
+  0b11001110,
+  0b11000110,
+  0b11000110,
+  0b01111100
+];
+
+const TILE_97_H = [
+  0b11001100,
+  0b11001100,
+  0b11001100,
+  0b11111100,
+  0b11111100,
+  0b11001100,
+  0b11001100,
+  0b11001100
+];
+
+const TILE_98_I = [
+  0b11111100,
+  0b00110000,
+  0b00110000,
+  0b00110000,
+  0b00110000,
+  0b00110000,
+  0b00110000,
+  0b11111100
+];
+
+const TILE_99_J = [
+  0b00011100,
+  0b00001100,
+  0b00001100,
+  0b00001100,
+  0b00001100,
+  0b11001100,
+  0b11001100,
+  0b01111000
+];
+
+const TILE_9A_K = [
+  0b11001100,
+  0b11011000,
+  0b11110000,
+  0b11100000,
+  0b11100000,
+  0b11110000,
+  0b11011000,
+  0b11001100
+];
+
+const TILE_9B_L = [
+  0b11000000,
+  0b11000000,
+  0b11000000,
+  0b11000000,
+  0b11000000,
+  0b11000000,
+  0b11000000,
+  0b11111100
+];
+
+const TILE_9C_M = [
+  0b11000110,
+  0b11101110,
+  0b11111110,
+  0b11010110,
+  0b11000110,
+  0b11000110,
+  0b11000110,
+  0b11000110
+];
+
+const TILE_9D_N = [
+  0b11000110,
+  0b11100110,
+  0b11100110,
+  0b11110110,
+  0b11011110,
+  0b11001110,
+  0b11001110,
+  0b11000110
+];
+
+const TILE_9E_O = [
+  0b01111000,
+  0b11001100,
+  0b11001100,
+  0b11001100,
+  0b11001100,
+  0b11001100,
+  0b11001100,
+  0b01111000
+];
+
+const TILE_9F_P = [
+  0b11111000,
+  0b11001100,
+  0b11001100,
+  0b11111000,
+  0b11000000,
+  0b11000000,
+  0b11000000,
+  0b11000000
+];
+
+const TILE_A0_Q = [
+  0b01111000,
+  0b11001100,
+  0b11001100,
+  0b11001100,
+  0b11011100,
+  0b11001100,
+  0b01111000,
+  0b00001100
+];
+
+const TILE_A1_R = [
+  0b11111000,
+  0b11001100,
+  0b11001100,
+  0b11111000,
+  0b11110000,
+  0b11011000,
+  0b11001100,
+  0b11001100
+];
+
+const TILE_A2_S = [
+  0b01111100,
+  0b11000000,
+  0b11000000,
+  0b01111000,
+  0b00001100,
+  0b00001100,
+  0b00001100,
+  0b11111000
+];
+
+const TILE_A3_T = [
+  0b11111100,
+  0b00110000,
+  0b00110000,
+  0b00110000,
+  0b00110000,
+  0b00110000,
+  0b00110000,
+  0b00110000
+];
+
+const TILE_A4_U = [
+  0b11001100,
+  0b11001100,
+  0b11001100,
+  0b11001100,
+  0b11001100,
+  0b11001100,
+  0b11001100,
+  0b01111000
+];
+
+const TILE_A5_V = [
+  0b11001100,
+  0b11001100,
+  0b11001100,
+  0b11001100,
+  0b01101100,
+  0b01111000,
+  0b01111000,
+  0b00110000
+];
+
+const TILE_A6_W = [
+  0b11000110,
+  0b11000110,
+  0b11000110,
+  0b11000110,
+  0b11010110,
+  0b11111110,
+  0b11101110,
+  0b11000110
+];
+
+const TILE_A7_X = [
+  0b11001100,
+  0b11001100,
+  0b01111000,
+  0b00110000,
+  0b00110000,
+  0b01111000,
+  0b11001100,
+  0b11001100
+];
+
+const TILE_A8_Y = [
+  0b11001100,
+  0b11001100,
+  0b11001100,
+  0b01111000,
+  0b00110000,
+  0b00110000,
+  0b00110000,
+  0b00110000
+];
+
+const TILE_A9_Z = [
+  0b11111100,
+  0b00001100,
+  0b00011000,
+  0b00110000,
+  0b00110000,
+  0b01100000,
+  0b11000000,
+  0b11111100
+];
+
+// ============================================
+// TROTTOIRS (mode MC)
+// Palette : 00=herbe vert clair, 01=gris (bordure côté route), 10=blanc (dalle), 11=Color RAM
+// ============================================
+
+// Tile $AA : Trottoir horizontal, route au-dessus (bordure en haut)
+const TILE_AA_TROTTOIR_H_HAUT = [
+  0b01010101,  // G G G G   (bordure grise, côté route)
+  0b10101010,  // W W W W   (dalle blanche)
+  0b10101010,
+  0b10101010,
+  0b10101010,
+  0b10101010,
+  0b10101010,
+  0b10101010
+];
+
+// Tile $AB : Trottoir horizontal, route en-dessous (bordure en bas)
+const TILE_AB_TROTTOIR_H_BAS = [
+  0b10101010,
+  0b10101010,
+  0b10101010,
+  0b10101010,
+  0b10101010,
+  0b10101010,
+  0b10101010,
+  0b01010101   // bordure grise en bas
+];
+
+// Tile $AC : Trottoir vertical, route à gauche (bordure à gauche)
+const TILE_AC_TROTTOIR_V_GAUCHE = [
+  0b01101010,  // G W W W
+  0b01101010,
+  0b01101010,
+  0b01101010,
+  0b01101010,
+  0b01101010,
+  0b01101010,
+  0b01101010
+];
+
+// Tile $AD : Trottoir vertical, route à droite (bordure à droite)
+const TILE_AD_TROTTOIR_V_DROITE = [
+  0b10101001,  // W W W G
+  0b10101001,
+  0b10101001,
+  0b10101001,
+  0b10101001,
+  0b10101001,
+  0b10101001,
+  0b10101001
+];
+
+// Tile $AE : Trottoir dalle pleine (pour le milieu, loin de toute bordure)
+const TILE_AE_TROTTOIR_PLEIN = [
+  0b10101010, 0b10101010, 0b10101010, 0b10101010,
+  0b10101010, 0b10101010, 0b10101010, 0b10101010
+];
+
+// Tile $AF : Trottoir coin externe NO (bordure en haut + bordure à gauche)
+// La route fait un angle au NO, le trottoir tourne autour
+const TILE_AF_TROTTOIR_COIN_NO = [
+  0b01010101,  // G G G G   (bordure haute)
+  0b01101010,  // G W W W   (bordure gauche, dalle à droite)
+  0b01101010,
+  0b01101010,
+  0b01101010,
+  0b01101010,
+  0b01101010,
+  0b01101010
+];
+
+// Tile $B0 : Trottoir coin externe NE (bordure en haut + bordure à droite)
+const TILE_B0_TROTTOIR_COIN_NE = [
+  0b01010101,  // G G G G
+  0b10101001,  // W W W G
+  0b10101001,
+  0b10101001,
+  0b10101001,
+  0b10101001,
+  0b10101001,
+  0b10101001
+];
+
+// Tile $B1 : Champ de blé (texture répétable)
+// Palette : 10=blanc (reflets/épis), 11=Color RAM=jaune
+const TILE_B1_CHAMP_BLE = [
+  0b11111111,  // J J J J
+  0b11101111,  // J W J J   (reflet)
+  0b11111111,
+  0b11111011,  // J J W J
+  0b11111111,
+  0b10111111,  // W J J J
+  0b11111111,
+  0b11111110   // J J J W
+];
+
+// ============================================
+// CLÔTURES (mode MC)
+// Palette : 00=herbe, 01=gris, 11=Color RAM=rouge/bois
+// 4 coins (NO, NE, SO, SE) pour former des enclos rectangulaires complets
+// ============================================
+
+// Tile $B2 : Clôture horizontale (longe est-ouest)
+const TILE_B2_CLOTURE_H = [
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b11111111,  // B B B B   (barre de bois)
+  0b11111111,
+  0b00000000,
+  0b00000000,
+  0b00000000
+];
+
+// Tile $B3 : Clôture verticale (longe nord-sud)
+const TILE_B3_CLOTURE_V = [
+  0b00111100, 0b00111100, 0b00111100, 0b00111100,
+  0b00111100, 0b00111100, 0b00111100, 0b00111100
+];
+
+// Tile $B4 : Clôture coin NO (branche vers E et S)
+const TILE_B4_CLOTURE_NO = [
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00111111,  // . B B B   (branche est)
+  0b00111111,
+  0b00111100,  // . B B .   (branche sud)
+  0b00111100,
+  0b00111100
+];
+
+// Tile $B5 : Clôture coin NE (branche vers O et S)
+const TILE_B5_CLOTURE_NE = [
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b11111100,  // B B B .   (branche ouest)
+  0b11111100,
+  0b00111100,  // . B B .   (branche sud)
+  0b00111100,
+  0b00111100
+];
+
+// Tile $B6 : Clôture coin SO (branche vers E et N)
+const TILE_B6_CLOTURE_SO = [
+  0b00111100,  // . B B .   (branche nord)
+  0b00111100,
+  0b00111100,
+  0b00111111,  // . B B B   (branche est)
+  0b00111111,
+  0b00000000,
+  0b00000000,
+  0b00000000
+];
+
+// Tile $B7 : Clôture coin SE (branche vers O et N)
+const TILE_B7_CLOTURE_SE = [
+  0b00111100,
+  0b00111100,
+  0b00111100,
+  0b11111100,  // B B B .   (branche ouest)
+  0b11111100,
+  0b00000000,
+  0b00000000,
+  0b00000000
+];
+
+// ============================================
+// PLACES DE PARKING (mode MC)
+// Chaque place fait 2 tiles de large × 2 tiles de haut (2× plus large qu'avant)
+// Pas de ligne blanche en bas : l'entrée se fait par le bas, sans rouler sur du blanc
+// Palette : 01=gris (bitume), 10=blanc (lignes), 11=Color RAM
+// ============================================
+
+// Tile $B8 : Place de parking - haut-gauche (ligne haute double + bordure gauche)
+const TILE_B8_PARKING_HG = [
+  0b10101010,  // W W W W   (ligne du haut - 1ère row)
+  0b10101010,  // W W W W   (ligne du haut - 2ème row pour l'épaisseur)
+  0b10010101,  // W G G G   (bordure gauche, bitume à droite)
+  0b10010101,
+  0b10010101,
+  0b10010101,
+  0b10010101,
+  0b10010101
+];
+
+// Tile $B9 : Place de parking - haut-droit (ligne haute double, SANS bordure droite)
+// La bordure droite est supprimée pour éviter les traits doubles entre 2 places vides
+// (la bordure gauche de la place suivante suffit). Seule la ligne horizontale du haut reste blanche.
+const TILE_B9_PARKING_HD = [
+  0b10101010,  // W W W W   (ligne du haut - 1ère row)
+  0b10101010,  // W W W W   (ligne du haut - 2ème row)
+  0b01010101,  // G G G G   (bitume uniforme, pas de bordure droite)
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101
+];
+
+// Tile $BA : Place de parking - bas-gauche (bordure gauche uniquement, pas de ligne bas)
+const TILE_BA_PARKING_BG = [
+  0b10010101,  // W G G G
+  0b10010101,
+  0b10010101,
+  0b10010101,
+  0b10010101,
+  0b10010101,
+  0b10010101,
+  0b10010101
+];
+
+// Tile $BB : Place de parking - bas-droit (SANS bordure droite, ni ligne bas)
+// Bitume uniforme sur toute la hauteur. La bordure gauche de la place suivante
+// assure la séparation visuelle.
+const TILE_BB_PARKING_BD = [
+  0b01010101,  // G G G G
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101,
+  0b01010101
+];
+
+// ============================================
+// PANNEAU PARKING 2×2 tiles (16×16 pixels)
+// P blanc sur cadre bleu, bordure bleue tout autour
+// Mode MC : 00=vert clair (autour), 10=blanc (lettre P), 11=Color RAM=bleu (cadre)
+// ============================================
+
+// Tile $BC : Panneau parking - Haut-Gauche
+// Bordure haute (rows 0-1 en bleu) + début du P (boucle supérieure gauche)
+const TILE_BC_PANNEAU_PARKING_HG = [
+  0b11111111,  // B B B B   (bordure haute)
+  0b11111111,  // B B B B
+  0b11101010,  // B W W W   (haut de la boucle)
+  0b11101010,
+  0b11101111,  // B W B B   (intérieur boucle : jambe gauche + vide)
+  0b11101111,
+  0b11101111,
+  0b11101010   // B W W W   (fin de la boucle en bas)
+];
+
+// Tile $BD : Panneau parking - Haut-Droit
+// Bordure haute + droite de la boucle du P
+const TILE_BD_PANNEAU_PARKING_HD = [
+  0b11111111,  // B B B B   (bordure haute)
+  0b11111111,
+  0b10101011,  // W W W B   (haut boucle continue, bordure droite)
+  0b10101011,
+  0b11111011,  // B B W B   (côté droit de la boucle)
+  0b11111011,
+  0b11111011,
+  0b10101011   // W W W B   (fin de la boucle)
+];
+
+// Tile $BE : Panneau parking - Bas-Gauche
+// Jambe du P qui descend + bordure basse
+const TILE_BE_PANNEAU_PARKING_BG = [
+  0b11101111,  // B W B B   (jambe du P seule)
+  0b11101111,
+  0b11101111,
+  0b11101111,
+  0b11101111,
+  0b11101111,
+  0b11111111,  // B B B B   (bordure basse)
+  0b11111111
+];
+
+// Tile $BF : Panneau parking - Bas-Droit
+// Intérieur bleu (sous la boucle, pas de lettre) + bordure basse
+const TILE_BF_PANNEAU_PARKING_BD = [
+  0b11111111,  // tout bleu (sous la boucle du P)
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,  // bordure basse
+  0b11111111
+];
+
+// ============================================
+// VOITURE VUE DE DESSUS (2 tiles × 3 tiles = 12 pixels × 24 pixels utiles)
+// Orientation : nez vers le haut (rentrée en marche avant)
+// Mode MC : 01=gris (bitume), 10=blanc (pare-brise, lunette, phares, feux),
+//           11=Color RAM=couleur de la voiture (carrosserie)
+// Structure verticale :
+//   rows 0-2 : nez avec phares
+//   rows 3-6 : pare-brise
+//   rows 7-15 : toit (cabine)
+//   rows 16-19 : lunette arrière
+//   rows 20-23 : arrière avec feux
+// ============================================
+
+// Tile $C0 : Voiture - Haut-Gauche (ligne blanche parking + nez + pare-brise)
+// Rows 0-1 = ligne blanche du fond de la place (continuité avec les places voisines)
+// Ensuite : phare, nez, pare-brise, début toit
+const TILE_C0_VOITURE_HG = [
+  0b10101010,  // W W W W   (ligne blanche du parking - 1ère row)
+  0b10101010,  // W W W W   (ligne blanche du parking - 2ème row)
+  0b01101111,  // G W C C   (phare gauche + nez)
+  0b01111111,  // G C C C   (nez carrosserie pleine)
+  0b01111010,  // G C W W   (début pare-brise)
+  0b01111010,
+  0b01111010,  // fin pare-brise (3 rows)
+  0b01111111   // G C C C   (début toit)
+];
+
+// Tile $C1 : Voiture - Haut-Droit (miroir HG)
+const TILE_C1_VOITURE_HD = [
+  0b10101010,  // W W W W   (ligne blanche du parking)
+  0b10101010,  // W W W W
+  0b11111001,  // C C W G   (phare droit)
+  0b11111101,  // C C C G   (nez)
+  0b10101101,  // W W C G   (pare-brise)
+  0b10101101,
+  0b10101101,
+  0b11111101   // début toit
+];
+
+// Tile $C2 : Voiture - Milieu-Gauche (toit uniforme)
+const TILE_C2_VOITURE_MG = [
+  0b01111111, 0b01111111, 0b01111111, 0b01111111,
+  0b01111111, 0b01111111, 0b01111111, 0b01111111
+];
+
+// Tile $C3 : Voiture - Milieu-Droit (miroir)
+const TILE_C3_VOITURE_MD = [
+  0b11111101, 0b11111101, 0b11111101, 0b11111101,
+  0b11111101, 0b11111101, 0b11111101, 0b11111101
+];
+
+// Tile $C4 : Voiture - Bas-Gauche (lunette arrière + arrière)
+const TILE_C4_VOITURE_BG = [
+  0b01111010,  // G C W W   (lunette arrière commence)
+  0b01111010,
+  0b01111010,
+  0b01111010,  // fin lunette
+  0b01111111,  // G C C C   (arrière carrosserie)
+  0b01111111,
+  0b01111111,
+  0b01101111   // G W C C   (feu arrière gauche)
+];
+
+// Tile $C5 : Voiture - Bas-Droit (miroir BG)
+const TILE_C5_VOITURE_BD = [
+  0b10101101,  // W W C G
+  0b10101101,
+  0b10101101,
+  0b10101101,
+  0b11111101,  // C C C G
+  0b11111101,
+  0b11111101,
+  0b11111001   // C C W G   (feu droit)
+];
+
+// ============================================
+// LOGO CLOSEAI (parodie OpenAI)
+// 9 tiles en carré 3×3 (24×24 pixels) en mode standard
+// Palette : 0 = fond vert clair, 1 = Color RAM = noir
+// Motif : cercle extérieur + hexagone intérieur (entrelacs stylisé)
+// ============================================
+
+const TILE_C6_LOGO_CLOSEAI_HG = [
+  0b00000000,
+  0b00000001,
+  0b00000011,
+  0b00000110,
+  0b00001110,
+  0b00111100,
+  0b01110100,
+  0b01100100
+];
+
+const TILE_C7_LOGO_CLOSEAI_HC = [
+  0b01111000,
+  0b11111110,
+  0b00000111,
+  0b00001111,
+  0b00011100,
+  0b01110000,
+  0b11000011,
+  0b11001110
+];
+
+const TILE_C8_LOGO_CLOSEAI_HD = [
+  0b00000000,
+  0b00000000,
+  0b11100000,
+  0b11111000,
+  0b00011000,
+  0b00001100,
+  0b10000100,
+  0b11100110
+];
+
+const TILE_C9_LOGO_CLOSEAI_MG = [
+  0b11000100,
+  0b11000100,
+  0b11000100,
+  0b11000100,
+  0b01000111,
+  0b01100001,
+  0b00111000,
+  0b01111110
+];
+
+const TILE_CA_LOGO_CLOSEAI_MC = [
+  0b11011100,
+  0b11100110,
+  0b11000011,
+  0b11000001,
+  0b11000011,
+  0b11000011,
+  0b01100111,
+  0b00111001
+];
+
+const TILE_CB_LOGO_CLOSEAI_MD = [
+  0b01111110,
+  0b00011100,
+  0b10000110,
+  0b11000010,
+  0b00100011,
+  0b00100011,
+  0b00100011,
+  0b00100011
+];
+
+const TILE_CC_LOGO_CLOSEAI_BG = [
+  0b01100111,
+  0b00100001,
+  0b00110000,
+  0b00011000,
+  0b00011111,
+  0b00000111,
+  0b00000000,
+  0b00000000
+];
+
+const TILE_CD_LOGO_CLOSEAI_BC = [
+  0b01110011,
+  0b11000011,
+  0b00001110,
+  0b00111100,
+  0b11110000,
+  0b11100000,
+  0b01111111,
+  0b00011111
+];
+
+const TILE_CE_LOGO_CLOSEAI_BD = [
+  0b00100110,
+  0b00100110,
+  0b00111100,
+  0b01110000,
+  0b01100000,
+  0b11000000,
+  0b10000000,
+  0b00000000
+];
+
+// ============================================
+// LOGO POMME (parodie Apple)
+// 9 tiles en carré 3×3 (24×24 pixels) en mode standard
+// Chaque tile a sa propre Color RAM : simulation des bandes multicolores
+// du logo Apple historique.
+// Rangée haute  : vert foncé (feuille/pomme verte)
+// Rangée milieu : jaune
+// Rangée basse  : rouge (pomme mûre)
+// ============================================
+
+const TILE_CF_LOGO_POMME_HG = [
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000111
+];
+
+const TILE_D0_LOGO_POMME_HC = [
+  0b00000000,
+  0b00000111,
+  0b00001111,
+  0b00011111,
+  0b00011111,
+  0b00011110,
+  0b00011100,
+  0b11111111
+];
+
+const TILE_D1_LOGO_POMME_HD = [
+  0b00000000,
+  0b00000000,
+  0b10000000,
+  0b10000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b11110000
+];
+
+const TILE_D2_LOGO_POMME_MG = [
+  0b00001111,
+  0b00011111,
+  0b00011111,
+  0b00011111,
+  0b00111111,
+  0b00111111,
+  0b00111111,
+  0b00111111
+];
+
+const TILE_D3_LOGO_POMME_MC = [
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111
+];
+
+const TILE_D4_LOGO_POMME_MD = [
+  0b11111000,
+  0b11111000,
+  0b11110000,
+  0b11100000,
+  0b11000000,
+  0b11000000,
+  0b11100000,
+  0b11100000
+];
+
+const TILE_D5_LOGO_POMME_BG = [
+  0b00011111,
+  0b00011111,
+  0b00011111,
+  0b00001111,
+  0b00001111,
+  0b00000111,
+  0b00000011,
+  0b00000000
+];
+
+const TILE_D6_LOGO_POMME_BC = [
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b00000000
+];
+
+const TILE_D7_LOGO_POMME_BD = [
+  0b11111000,
+  0b11111000,
+  0b11111000,
+  0b11111000,
+  0b11110000,
+  0b11100000,
+  0b11000000,
+  0b00000000
+];
+
+// ============================================
+// LOGO GOGLE (parodie Google)
+// 9 tiles en carré 3×3 (24×24 pixels), mode standard
+// Lettre "G" stylisée avec 4 zones de couleurs :
+//   - Rangée haute : rouge
+//   - Milieu gauche : jaune
+//   - Milieu centre + droite : bleu
+//   - Rangée basse : vert
+// ============================================
+
+const TILE_D8_LOGO_GOGLE_HG = [
+  0b00000000,
+  0b00000000,
+  0b00000111,
+  0b00001111,
+  0b00001111,
+  0b00111111,
+  0b00111111,
+  0b01111110
+];
+
+const TILE_D9_LOGO_GOGLE_HC = [
+  0b00000000,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b11110111,
+  0b00000000,
+  0b00000000,
+  0b00000000
+];
+
+const TILE_DA_LOGO_GOGLE_HD = [
+  0b00000000,
+  0b10000000,
+  0b11100000,
+  0b11100000,
+  0b11100000,
+  0b11000000,
+  0b00000000,
+  0b00000000
+];
+
+const TILE_DB_LOGO_GOGLE_MG = [
+  0b01111000,
+  0b01111000,
+  0b01111000,
+  0b01110000,
+  0b01110000,
+  0b01111000,
+  0b01111000,
+  0b01111000
+];
+
+const TILE_DC_LOGO_GOGLE_MC = [
+  0b00000000,
+  0b00000000,
+  0b00001111,
+  0b00001111,
+  0b00001111,
+  0b00001111,
+  0b00000000,
+  0b00000000
+];
+
+const TILE_DD_LOGO_GOGLE_MD = [
+  0b00000000,
+  0b00000000,
+  0b11111110,
+  0b11111110,
+  0b11111110,
+  0b11111110,
+  0b00011110,
+  0b00111110
+];
+
+const TILE_DE_LOGO_GOGLE_BG = [
+  0b01111100,
+  0b00111110,
+  0b00011111,
+  0b00001111,
+  0b00000111,
+  0b00000011,
+  0b00000000,
+  0b00000000
+];
+
+const TILE_DF_LOGO_GOGLE_BC = [
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b01111110,
+  0b00000000
+];
+
+const TILE_E0_LOGO_GOGLE_BD = [
+  0b01111100,
+  0b01111100,
+  0b11111100,
+  0b11111000,
+  0b11110000,
+  0b11000000,
+  0b00000000,
+  0b00000000
+];
+
+// ============================================
+// LOGO LECAT (parodie Mistral)
+// 9 tiles en carré 3×3 (24×24 pixels), mode standard
+// Lettre "M" stylisée avec 3 bandes de couleurs :
+//   - Rangée haute  : jaune
+//   - Rangée milieu : "orange" (simulé par rose/saumon C64)
+//   - Rangée basse  : rouge
+// ============================================
+
+const TILE_E1_LOGO_LECAT_HG = [
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00001110,
+  0b00001110,
+  0b00001110,
+  0b00001111
+];
+
+const TILE_E2_LOGO_LECAT_HC = [
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b11000011
+];
+
+const TILE_E3_LOGO_LECAT_HD = [
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b01110000,
+  0b01110000,
+  0b01110000,
+  0b11110000
+];
+
+const TILE_E4_LOGO_LECAT_MG = [
+  0b00001111,
+  0b00001111,
+  0b00001111,
+  0b00001111,
+  0b00001111,
+  0b00001111,
+  0b00001110,
+  0b00001110
+];
+
+const TILE_E5_LOGO_LECAT_MC = [
+  0b11000011,
+  0b11000011,
+  0b11000111,
+  0b11111111,
+  0b11111111,
+  0b11111111,
+  0b00111000,
+  0b00111000
+];
+
+const TILE_E6_LOGO_LECAT_MD = [
+  0b11110000,
+  0b11110000,
+  0b11110000,
+  0b11110000,
+  0b11110000,
+  0b11110000,
+  0b01110000,
+  0b01110000
+];
+
+const TILE_E7_LOGO_LECAT_BG = [
+  0b00001110,
+  0b01111111,
+  0b01111111,
+  0b01111111,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000
+];
+
+const TILE_E8_LOGO_LECAT_BC = [
+  0b00111000,
+  0b11000111,
+  0b11000111,
+  0b11000111,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000
+];
+
+const TILE_E9_LOGO_LECAT_BD = [
+  0b01110000,
+  0b11111110,
+  0b11111110,
+  0b11111110,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000
+];
+
+// ============================================
+// LOGO GLOCK (parodie xAI)
+// 9 tiles en carré 3×3 (24×24 pixels), mode standard
+// Symbole noir uniforme sur fond vert clair
+// ============================================
+
+const TILE_EA_LOGO_GLOCK_HG = [
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000001,
+  0b00000011,
+  0b00000111
+];
+
+const TILE_EB_LOGO_GLOCK_HC = [
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00011000,
+  0b11111111,
+  0b11111111,
+  0b11000000,
+  0b00000000
+];
+
+const TILE_EC_LOGO_GLOCK_HD = [
+  0b00000000,
+  0b00000000,
+  0b00000010,
+  0b00000100,
+  0b10001100,
+  0b10011000,
+  0b00111000,
+  0b01111000
+];
+
+const TILE_ED_LOGO_GLOCK_MG = [
+  0b00001110,
+  0b00001100,
+  0b00001100,
+  0b00011100,
+  0b00011100,
+  0b00011100,
+  0b00001100,
+  0b00001100
+];
+
+const TILE_EE_LOGO_GLOCK_MC = [
+  0b00000000,
+  0b00000001,
+  0b00000011,
+  0b00000110,
+  0b00001000,
+  0b00010000,
+  0b00100000,
+  0b00000000
+];
+
+const TILE_EF_LOGO_GLOCK_MD = [
+  0b11111000,
+  0b11111000,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00011000,
+  0b00111000
+];
+
+const TILE_F0_LOGO_GLOCK_BG = [
+  0b00001110,
+  0b00001110,
+  0b00001100,
+  0b00001000,
+  0b00010000,
+  0b00100000,
+  0b00000000,
+  0b00000000
+];
+
+const TILE_F1_LOGO_GLOCK_BC = [
+  0b00000000,
+  0b00000000,
+  0b00000001,
+  0b11111111,
+  0b11111111,
+  0b00000000,
+  0b00000000,
+  0b00000000
+];
+
+const TILE_F2_LOGO_GLOCK_BD = [
+  0b01110000,
+  0b01110000,
+  0b11100000,
+  0b11000000,
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b00000000
+];
+
+// ============================================
+// LOGO GWEN (parodie Alibaba)
+// 9 tiles en carré 3×3 (24×24 pixels), mode standard
+// Symbole mauve/violet sur fond vert clair
+// ============================================
+
+const TILE_F3_LOGO_GWEN_HG = [
+  0b00000000,
+  0b00000000,
+  0b00000001,
+  0b00000001,
+  0b00000010,
+  0b00000100,
+  0b00000100,
+  0b01101000
+];
+
+const TILE_F4_LOGO_GWEN_HC = [
+  0b11111000,
+  0b11111000,
+  0b00111100,
+  0b00111111,
+  0b00111111,
+  0b01111111,
+  0b00000000,
+  0b00000000
+];
+
+const TILE_F5_LOGO_GWEN_HD = [
+  0b00000000,
+  0b00000000,
+  0b00000000,
+  0b11111000,
+  0b11111000,
+  0b11111100,
+  0b00000100,
+  0b00000100
+];
+
+const TILE_F6_LOGO_GWEN_MG = [
+  0b11110000,
+  0b11110000,
+  0b01111000,
+  0b01111000,
+  0b00111100,
+  0b00111100,
+  0b00011110,
+  0b00011111
+];
+
+const TILE_F7_LOGO_GWEN_MC = [
+  0b00000000,
+  0b00000000,
+  0b01111110,
+  0b01111110,
+  0b00111100,
+  0b00111100,
+  0b00011000,
+  0b00000000
+];
+
+const TILE_F8_LOGO_GWEN_MD = [
+  0b00001000,
+  0b00001000,
+  0b00000100,
+  0b00000100,
+  0b00100010,
+  0b00100010,
+  0b01110001,
+  0b11111111
+];
+
+const TILE_F9_LOGO_GWEN_BG = [
+  0b00111111,
+  0b00111111,
+  0b00111000,
+  0b00010000,
+  0b00011111,
+  0b00000000,
+  0b00000000,
+  0b00000000
+];
+
+const TILE_FA_LOGO_GWEN_BC = [
+  0b00000000,
+  0b10000001,
+  0b00000001,
+  0b00000011,
+  0b11000011,
+  0b00100111,
+  0b00011111,
+  0b00011111
+];
+
+const TILE_FB_LOGO_GWEN_BD = [
+  0b11111110,
+  0b11111100,
+  0b11100000,
+  0b11000000,
+  0b11000000,
+  0b10000000,
+  0b10000000,
+  0b00000000
+];
+
+// ============================================
+// Couleurs C64
+// ============================================
+const C64_GREEN_DARK = '#588d43';
+const C64_GREEN_LIGHT = '#9ad284';
+const C64_WHITE = '#ffffff';
+const C64_GREY = '#444444';
+const C64_RED = '#68372b';
+const C64_CYAN = '#70a4b2';
+const C64_BLUE = '#352879';
+const C64_BLACK = '#000000';
+const C64_YELLOW = '#b8c76f';
+const C64_PINK = '#9a6759';  // couleur C64 #10 : rose/saumon, utilisée pour simuler l'orange
+const C64_PURPLE = '#6f3d86';  // couleur C64 #4 : violet/mauve
+// ============================================
+// Constantes de tiles (codes hexadécimaux)
+// ============================================
+const T_HERBE = 0x40;
+const T_ROUTE_H = 0x41;
+const T_ROUTE_V = 0x42;
+const T_STOP = 0x43;
+const T_POTEAU = 0x44;
+const T_ROUTE_VG = 0x45;
+const T_ROUTE_VD = 0x46;
+const T_ROUTE_HH = 0x47;
+const T_ROUTE_HB = 0x48;
+const T_TIRET_HAUT = 0x49;
+const T_TIRET_BAS = 0x4A;
+const T_TIRET_V_GAUCHE = 0x4B;
+const T_TIRET_V_DROITE = 0x4C;
+const T_VIDE = 0x4D;
+const T_PLEIN = 0x4E;
+const T_TOIT_PENTE_G = 0x4F;
+const T_TOIT_PENTE_D = 0x50;
+const T_TOIT_PLEIN = 0x51;
+const T_MUR_BETON = 0x52;
+const T_FENETRE = 0x53;
+const T_PORTE = 0x54;
+const T_CHEMINEE = 0x55;
+const T_FENETRE_B = 0x56;
+const T_TOIT_IMM = 0x57;
+const T_ANTENNE_S = 0x58;
+const T_ANTENNE_R = 0x59;
+const T_FEU_H_ETEINT = 0x5A;
+const T_FEU_H_ROUGE = 0x5B;
+const T_FEU_H_ORANGE = 0x5C;
+const T_FEU_H_VERT = 0x5D;
+const T_FEU_B_ETEINT = 0x5E;
+const T_FEU_B_VERT = 0x5F;
+
+// Tiles aquatiques
+const T_EAU = 0x60;
+const T_PISC_BORD_H = 0x61;
+const T_PISC_BORD_B = 0x62;
+const T_PISC_BORD_G = 0x63;
+const T_PISC_BORD_D = 0x64;
+const T_PISC_NO = 0x65;
+const T_PISC_NE = 0x66;
+const T_PISC_SO = 0x67;
+const T_PISC_SE = 0x68;
+const T_PISC_CONC_NO = 0x69;
+const T_PISC_CONC_NE = 0x6A;
+const T_PISC_CONC_SO = 0x6B;
+const T_PISC_CONC_SE = 0x6C;
+const T_LAC_BORD_H = 0x6D;
+const T_LAC_BORD_B = 0x6E;
+const T_LAC_BORD_G = 0x6F;
+const T_LAC_BORD_D = 0x70;
+const T_LAC_NO = 0x71;
+const T_LAC_NE = 0x72;
+const T_LAC_SO = 0x73;
+const T_LAC_SE = 0x74;
+const T_LAC_CONC_NO = 0x75;
+const T_LAC_CONC_NE = 0x76;
+const T_LAC_CONC_SO = 0x77;
+const T_LAC_CONC_SE = 0x78;
+
+// Tiles forêt : 3 arbres + 4 damier-coins
+// Les arbres ont UN SEUL code tile chacun. La couleur (jaune/vert) est contrôlée
+// par la Color RAM, comme sur le vrai C64 : Screen RAM = code tile, Color RAM = couleur,
+// les deux sont INDÉPENDANTES.
+const T_ARBRE_ROND = 0x79;
+const T_ARBRE_CONIQUE = 0x7A;
+const T_ARBRE_TOUFFU = 0x7B;
+const T_DAMIER_NO = 0x7C;
+const T_DAMIER_NE = 0x7D;
+const T_DAMIER_SO = 0x7E;
+const T_DAMIER_SE = 0x7F;
+
+// Tiles garage (2×2 tiles = 4 codes distincts)
+const T_GARAGE_HG = 0x80;
+const T_GARAGE_HD = 0x81;
+const T_GARAGE_BG = 0x82;
+const T_GARAGE_BD = 0x83;
+const T_GARAGE_HM = 0x84;
+const T_GARAGE_BM = 0x85;
+const T_CROIX_HG = 0x86;
+const T_CROIX_HD = 0x87;
+const T_CROIX_BG = 0x88;
+const T_CROIX_BD = 0x89;
+
+// Helper : pour un code de tile, retourne { tileData, colorMap, isMC }
+function getTileInfo(tileCode) {
+  // Support du format {tile, colorRam} : reflet de l'architecture C64 où Screen RAM
+  // (le code tile) et Color RAM (la couleur) sont stockées séparément.
+  // Quand on passe un objet, on prend le code tile mais on remplace la "couleur 11"
+  // (Color RAM en MC) ou la couleur 1 (en standard) par la colorRam fournie.
+  if (typeof tileCode === 'object' && tileCode !== null) {
+    const info = getTileInfo(tileCode.tile);
+    if (!info) return null;
+    const newColorMap = Object.assign({}, info.colorMap);
+    if (info.isMC) {
+      newColorMap[0b11] = tileCode.colorRam;
+    } else {
+      newColorMap[1] = tileCode.colorRam;
+    }
+    return { tileData: info.tileData, colorMap: newColorMap, isMC: info.isMC };
+  }
+  if (tileCode === T_HERBE) return { tileData: TILE_40_HERBE, colorMap: { 0: C64_GREEN_LIGHT, 1: C64_GREEN_DARK }, isMC: false };
+  if (tileCode === T_VIDE) return { tileData: TILE_4D_VIDE, colorMap: { 0: C64_GREEN_LIGHT, 1: C64_GREEN_DARK }, isMC: false };
+  if (tileCode === T_PLEIN) return { tileData: TILE_4E_PLEIN, colorMap: { 0: C64_GREEN_LIGHT, 1: C64_GREEN_DARK }, isMC: false };
+  if (tileCode === T_TOIT_PENTE_G) return { tileData: TILE_4F_TOIT_PENTE_G, colorMap: { 0: C64_GREEN_LIGHT, 1: C64_RED }, isMC: false };
+  if (tileCode === T_TOIT_PENTE_D) return { tileData: TILE_50_TOIT_PENTE_D, colorMap: { 0: C64_GREEN_LIGHT, 1: C64_RED }, isMC: false };
+  if (tileCode === T_TOIT_PLEIN) return { tileData: TILE_51_TOIT_PLEIN, colorMap: { 0: C64_GREEN_LIGHT, 1: C64_RED }, isMC: false };
+  const cmRoute = { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_RED };
+  if (tileCode === T_ROUTE_H) return { tileData: TILE_41_ROUTE_H, colorMap: cmRoute, isMC: true };
+  if (tileCode === T_ROUTE_V) return { tileData: TILE_42_ROUTE_V, colorMap: cmRoute, isMC: true };
+  if (tileCode === T_STOP) return { tileData: TILE_43_STOP, colorMap: cmRoute, isMC: true };
+  if (tileCode === T_POTEAU) return { tileData: TILE_44_POTEAU, colorMap: cmRoute, isMC: true };
+  if (tileCode === T_ROUTE_VG) return { tileData: TILE_45_ROUTE_VG, colorMap: cmRoute, isMC: true };
+  if (tileCode === T_ROUTE_VD) return { tileData: TILE_46_ROUTE_VD, colorMap: cmRoute, isMC: true };
+  if (tileCode === T_ROUTE_HH) return { tileData: TILE_47_ROUTE_HH, colorMap: cmRoute, isMC: true };
+  if (tileCode === T_ROUTE_HB) return { tileData: TILE_48_ROUTE_HB, colorMap: cmRoute, isMC: true };
+  if (tileCode === T_TIRET_HAUT) return { tileData: TILE_49_ROUTE_TIRET_HAUT, colorMap: cmRoute, isMC: true };
+  if (tileCode === T_TIRET_BAS) return { tileData: TILE_4A_ROUTE_TIRET_BAS, colorMap: cmRoute, isMC: true };
+  if (tileCode === T_TIRET_V_GAUCHE) return { tileData: TILE_4B_TIRET_GAUCHE, colorMap: cmRoute, isMC: true };
+  if (tileCode === T_TIRET_V_DROITE) return { tileData: TILE_4C_TIRET_DROITE, colorMap: cmRoute, isMC: true };
+  if (tileCode === T_MUR_BETON) return { tileData: TILE_52_MUR_BETON, colorMap: { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_RED }, isMC: true };
+  if (tileCode === T_FENETRE) return { tileData: TILE_53_FENETRE_CYAN, colorMap: { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_CYAN }, isMC: true };
+  if (tileCode === T_PORTE) return { tileData: TILE_54_PORTE_NOIRE, colorMap: { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_BLACK }, isMC: true };
+  if (tileCode === T_CHEMINEE) return { tileData: TILE_55_CHEMINEE, colorMap: { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_RED }, isMC: true };
+  if (tileCode === T_FENETRE_B) return { tileData: TILE_56_FENETRE_BLANCHE, colorMap: { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_BLACK }, isMC: true };
+  if (tileCode === T_TOIT_IMM) return { tileData: TILE_57_TOIT_ETUDIE, colorMap: { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_BLACK }, isMC: true };
+  if (tileCode === T_ANTENNE_S) return { tileData: TILE_58_ANTENNE_SIMPLE, colorMap: { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_BLACK }, isMC: true };
+  if (tileCode === T_ANTENNE_R) return { tileData: TILE_59_ANTENNE_RATEAU, colorMap: { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_BLACK }, isMC: true };
+  if (tileCode === T_FEU_H_ETEINT) return { tileData: TILE_5A_FEU_HAUT_ETEINT, colorMap: { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_GREY }, isMC: true };
+  if (tileCode === T_FEU_H_ROUGE) return { tileData: TILE_5B_FEU_HAUT_ROUGE, colorMap: { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_RED }, isMC: true };
+  if (tileCode === T_FEU_H_ORANGE) return { tileData: TILE_5C_FEU_HAUT_ORANGE, colorMap: { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_YELLOW }, isMC: true };
+  if (tileCode === T_FEU_H_VERT) return { tileData: TILE_5D_FEU_HAUT_VERT, colorMap: { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_GREEN_DARK }, isMC: true };
+  if (tileCode === T_FEU_B_ETEINT) return { tileData: TILE_5E_FEU_BAS_ETEINT, colorMap: { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_GREY }, isMC: true };
+  if (tileCode === T_FEU_B_VERT) return { tileData: TILE_5F_FEU_BAS_VERT, colorMap: { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_GREEN_DARK }, isMC: true };
+  // Tiles aquatiques (piscines + lacs) : Color RAM = cyan
+  const _cmAqua = { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_CYAN };
+  if (tileCode === T_EAU) return { tileData: TILE_60_EAU, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_PISC_BORD_H) return { tileData: TILE_61_PISC_BORD_H, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_PISC_BORD_B) return { tileData: TILE_62_PISC_BORD_B, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_PISC_BORD_G) return { tileData: TILE_63_PISC_BORD_G, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_PISC_BORD_D) return { tileData: TILE_64_PISC_BORD_D, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_PISC_NO) return { tileData: TILE_65_PISC_COIN_NO, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_PISC_NE) return { tileData: TILE_66_PISC_COIN_NE, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_PISC_SO) return { tileData: TILE_67_PISC_COIN_SO, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_PISC_SE) return { tileData: TILE_68_PISC_COIN_SE, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_PISC_CONC_NO) return { tileData: TILE_69_PISC_CONC_NO, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_PISC_CONC_NE) return { tileData: TILE_6A_PISC_CONC_NE, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_PISC_CONC_SO) return { tileData: TILE_6B_PISC_CONC_SO, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_PISC_CONC_SE) return { tileData: TILE_6C_PISC_CONC_SE, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_LAC_BORD_H) return { tileData: TILE_6D_LAC_BORD_H, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_LAC_BORD_B) return { tileData: TILE_6E_LAC_BORD_B, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_LAC_BORD_G) return { tileData: TILE_6F_LAC_BORD_G, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_LAC_BORD_D) return { tileData: TILE_70_LAC_BORD_D, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_LAC_NO) return { tileData: TILE_71_LAC_NO, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_LAC_NE) return { tileData: TILE_72_LAC_NE, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_LAC_SO) return { tileData: TILE_73_LAC_SO, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_LAC_SE) return { tileData: TILE_74_LAC_SE, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_LAC_CONC_NO) return { tileData: TILE_75_LAC_CONC_NO, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_LAC_CONC_NE) return { tileData: TILE_76_LAC_CONC_NE, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_LAC_CONC_SO) return { tileData: TILE_77_LAC_CONC_SO, colorMap: _cmAqua, isMC: true };
+  if (tileCode === T_LAC_CONC_SE) return { tileData: TILE_78_LAC_CONC_SE, colorMap: _cmAqua, isMC: true };
+  // Forêt : les 3 tiles d'arbre ont tous la même palette sauf pour la couleur 11 (Color RAM).
+  // Par défaut on prend le jaune ; si l'appelant passe {tile, colorRam}, on utilise sa valeur.
+  const _cmArbre = { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_YELLOW };
+  const _cmDamier = { 0: C64_GREEN_LIGHT, 1: C64_GREEN_DARK };
+  if (tileCode === T_ARBRE_ROND) return { tileData: TILE_79_ARBRE_ROND, colorMap: _cmArbre, isMC: true };
+  if (tileCode === T_ARBRE_CONIQUE) return { tileData: TILE_7A_ARBRE_CONIQUE, colorMap: _cmArbre, isMC: true };
+  if (tileCode === T_ARBRE_TOUFFU) return { tileData: TILE_7B_ARBRE_TOUFFU, colorMap: _cmArbre, isMC: true };
+  if (tileCode === T_DAMIER_NO) return { tileData: TILE_7C_DAMIER_NO, colorMap: _cmDamier, isMC: false };
+  if (tileCode === T_DAMIER_NE) return { tileData: TILE_7D_DAMIER_NE, colorMap: _cmDamier, isMC: false };
+  if (tileCode === T_DAMIER_SO) return { tileData: TILE_7E_DAMIER_SO, colorMap: _cmDamier, isMC: false };
+  if (tileCode === T_DAMIER_SE) return { tileData: TILE_7F_DAMIER_SE, colorMap: _cmDamier, isMC: false };
+  // Tiles garage : MC, Color RAM = noir
+  const _cmGarage = { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_BLACK };
+  if (tileCode === T_GARAGE_HG) return { tileData: TILE_80_GARAGE_HG, colorMap: _cmGarage, isMC: true };
+  if (tileCode === T_GARAGE_HD) return { tileData: TILE_81_GARAGE_HD, colorMap: _cmGarage, isMC: true };
+  if (tileCode === T_GARAGE_BG) return { tileData: TILE_82_GARAGE_BG, colorMap: _cmGarage, isMC: true };
+  if (tileCode === T_GARAGE_BD) return { tileData: TILE_83_GARAGE_BD, colorMap: _cmGarage, isMC: true };
+  if (tileCode === T_GARAGE_HM) return { tileData: TILE_84_GARAGE_HM, colorMap: _cmGarage, isMC: true };
+  if (tileCode === T_GARAGE_BM) return { tileData: TILE_85_GARAGE_BM, colorMap: _cmGarage, isMC: true };
+  const _cmCroix = { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_RED };
+  if (tileCode === T_CROIX_HG) return { tileData: TILE_86_CROIX_HG, colorMap: _cmCroix, isMC: true };
+  if (tileCode === T_CROIX_HD) return { tileData: TILE_87_CROIX_HD, colorMap: _cmCroix, isMC: true };
+  if (tileCode === T_CROIX_BG) return { tileData: TILE_88_CROIX_BG, colorMap: _cmCroix, isMC: true };
+  if (tileCode === T_CROIX_BD) return { tileData: TILE_89_CROIX_BD, colorMap: _cmCroix, isMC: true };
+  // Lettres A-Z : plage $90-$A9, tous en mode standard
+  // Color RAM par défaut = noir ; peut être remplacée via {tile, colorRam}
+  const _tilesLettres = [
+    TILE_90_A, TILE_91_B, TILE_92_C, TILE_93_D, TILE_94_E, TILE_95_F, TILE_96_G,
+    TILE_97_H, TILE_98_I, TILE_99_J, TILE_9A_K, TILE_9B_L, TILE_9C_M, TILE_9D_N,
+    TILE_9E_O, TILE_9F_P, TILE_A0_Q, TILE_A1_R, TILE_A2_S, TILE_A3_T, TILE_A4_U,
+    TILE_A5_V, TILE_A6_W, TILE_A7_X, TILE_A8_Y, TILE_A9_Z
+  ];
+  if (tileCode >= 0x90 && tileCode <= 0xA9) {
+    return { tileData: _tilesLettres[tileCode - 0x90], colorMap: { 0: C64_GREEN_LIGHT, 1: C64_BLACK }, isMC: false };
+  }
+  // Trottoirs ($AA-$B0) : MC, palette bitume/dalle
+  const _cmTrottoir = { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_BLACK };
+  if (tileCode === 0xAA) return { tileData: TILE_AA_TROTTOIR_H_HAUT, colorMap: _cmTrottoir, isMC: true };
+  if (tileCode === 0xAB) return { tileData: TILE_AB_TROTTOIR_H_BAS, colorMap: _cmTrottoir, isMC: true };
+  if (tileCode === 0xAC) return { tileData: TILE_AC_TROTTOIR_V_GAUCHE, colorMap: _cmTrottoir, isMC: true };
+  if (tileCode === 0xAD) return { tileData: TILE_AD_TROTTOIR_V_DROITE, colorMap: _cmTrottoir, isMC: true };
+  if (tileCode === 0xAE) return { tileData: TILE_AE_TROTTOIR_PLEIN, colorMap: _cmTrottoir, isMC: true };
+  if (tileCode === 0xAF) return { tileData: TILE_AF_TROTTOIR_COIN_NO, colorMap: _cmTrottoir, isMC: true };
+  if (tileCode === 0xB0) return { tileData: TILE_B0_TROTTOIR_COIN_NE, colorMap: _cmTrottoir, isMC: true };
+  // Champ de blé : Color RAM variable (jaune pour blé doré, vert foncé pour blé jeune)
+  const _cmChampBle = { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_YELLOW };
+  if (tileCode === 0xB1) return { tileData: TILE_B1_CHAMP_BLE, colorMap: _cmChampBle, isMC: true };
+  // Clôtures : Color RAM = bois/rouge, 4 coins pour enclos rectangulaires complets
+  const _cmCloture = { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_RED };
+  if (tileCode === 0xB2) return { tileData: TILE_B2_CLOTURE_H, colorMap: _cmCloture, isMC: true };
+  if (tileCode === 0xB3) return { tileData: TILE_B3_CLOTURE_V, colorMap: _cmCloture, isMC: true };
+  if (tileCode === 0xB4) return { tileData: TILE_B4_CLOTURE_NO, colorMap: _cmCloture, isMC: true };
+  if (tileCode === 0xB5) return { tileData: TILE_B5_CLOTURE_NE, colorMap: _cmCloture, isMC: true };
+  if (tileCode === 0xB6) return { tileData: TILE_B6_CLOTURE_SO, colorMap: _cmCloture, isMC: true };
+  if (tileCode === 0xB7) return { tileData: TILE_B7_CLOTURE_SE, colorMap: _cmCloture, isMC: true };
+  // Places de parking : 2×2 tiles, palette route standard
+  const _cmParking = { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_RED };
+  if (tileCode === 0xB8) return { tileData: TILE_B8_PARKING_HG, colorMap: _cmParking, isMC: true };
+  if (tileCode === 0xB9) return { tileData: TILE_B9_PARKING_HD, colorMap: _cmParking, isMC: true };
+  if (tileCode === 0xBA) return { tileData: TILE_BA_PARKING_BG, colorMap: _cmParking, isMC: true };
+  if (tileCode === 0xBB) return { tileData: TILE_BB_PARKING_BD, colorMap: _cmParking, isMC: true };
+  // Panneau parking 2×2 : cadre bleu avec P blanc (Color RAM = bleu)
+  const _cmPanneauP = { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_BLUE };
+  if (tileCode === 0xBC) return { tileData: TILE_BC_PANNEAU_PARKING_HG, colorMap: _cmPanneauP, isMC: true };
+  if (tileCode === 0xBD) return { tileData: TILE_BD_PANNEAU_PARKING_HD, colorMap: _cmPanneauP, isMC: true };
+  if (tileCode === 0xBE) return { tileData: TILE_BE_PANNEAU_PARKING_BG, colorMap: _cmPanneauP, isMC: true };
+  if (tileCode === 0xBF) return { tileData: TILE_BF_PANNEAU_PARKING_BD, colorMap: _cmPanneauP, isMC: true };
+  // Voiture vue de dessus : Color RAM = couleur de la voiture (variable par instance)
+  // Palette fixe : 01=gris (bitume), 10=blanc (pare-brise/phares), 11=Color RAM (carrosserie)
+  const _cmVoiture = { 0b00: C64_GREEN_LIGHT, 0b01: C64_GREY, 0b10: C64_WHITE, 0b11: C64_RED };
+  if (tileCode === 0xC0) return { tileData: TILE_C0_VOITURE_HG, colorMap: _cmVoiture, isMC: true };
+  if (tileCode === 0xC1) return { tileData: TILE_C1_VOITURE_HD, colorMap: _cmVoiture, isMC: true };
+  if (tileCode === 0xC2) return { tileData: TILE_C2_VOITURE_MG, colorMap: _cmVoiture, isMC: true };
+  if (tileCode === 0xC3) return { tileData: TILE_C3_VOITURE_MD, colorMap: _cmVoiture, isMC: true };
+  if (tileCode === 0xC4) return { tileData: TILE_C4_VOITURE_BG, colorMap: _cmVoiture, isMC: true };
+  if (tileCode === 0xC5) return { tileData: TILE_C5_VOITURE_BD, colorMap: _cmVoiture, isMC: true };
+  // Logo CloseAI : 9 tiles en mode standard, Color RAM = noir
+  const _cmLogoCloseAI = { 0: C64_GREEN_LIGHT, 1: C64_BLACK };
+  if (tileCode === 0xC6) return { tileData: TILE_C6_LOGO_CLOSEAI_HG, colorMap: _cmLogoCloseAI, isMC: false };
+  if (tileCode === 0xC7) return { tileData: TILE_C7_LOGO_CLOSEAI_HC, colorMap: _cmLogoCloseAI, isMC: false };
+  if (tileCode === 0xC8) return { tileData: TILE_C8_LOGO_CLOSEAI_HD, colorMap: _cmLogoCloseAI, isMC: false };
+  if (tileCode === 0xC9) return { tileData: TILE_C9_LOGO_CLOSEAI_MG, colorMap: _cmLogoCloseAI, isMC: false };
+  if (tileCode === 0xCA) return { tileData: TILE_CA_LOGO_CLOSEAI_MC, colorMap: _cmLogoCloseAI, isMC: false };
+  if (tileCode === 0xCB) return { tileData: TILE_CB_LOGO_CLOSEAI_MD, colorMap: _cmLogoCloseAI, isMC: false };
+  if (tileCode === 0xCC) return { tileData: TILE_CC_LOGO_CLOSEAI_BG, colorMap: _cmLogoCloseAI, isMC: false };
+  if (tileCode === 0xCD) return { tileData: TILE_CD_LOGO_CLOSEAI_BC, colorMap: _cmLogoCloseAI, isMC: false };
+  if (tileCode === 0xCE) return { tileData: TILE_CE_LOGO_CLOSEAI_BD, colorMap: _cmLogoCloseAI, isMC: false };
+  // Logo Pomme : 3 bandes de couleurs (vert / jaune / rouge) en mode standard
+  const _cmPommeVert  = { 0: C64_GREEN_LIGHT, 1: C64_GREEN_DARK };
+  const _cmPommeJaune = { 0: C64_GREEN_LIGHT, 1: C64_YELLOW };
+  const _cmPommeRouge = { 0: C64_GREEN_LIGHT, 1: C64_RED };
+  if (tileCode === 0xCF) return { tileData: TILE_CF_LOGO_POMME_HG, colorMap: _cmPommeVert, isMC: false };
+  if (tileCode === 0xD0) return { tileData: TILE_D0_LOGO_POMME_HC, colorMap: _cmPommeVert, isMC: false };
+  if (tileCode === 0xD1) return { tileData: TILE_D1_LOGO_POMME_HD, colorMap: _cmPommeVert, isMC: false };
+  if (tileCode === 0xD2) return { tileData: TILE_D2_LOGO_POMME_MG, colorMap: _cmPommeJaune, isMC: false };
+  if (tileCode === 0xD3) return { tileData: TILE_D3_LOGO_POMME_MC, colorMap: _cmPommeJaune, isMC: false };
+  if (tileCode === 0xD4) return { tileData: TILE_D4_LOGO_POMME_MD, colorMap: _cmPommeJaune, isMC: false };
+  if (tileCode === 0xD5) return { tileData: TILE_D5_LOGO_POMME_BG, colorMap: _cmPommeRouge, isMC: false };
+  if (tileCode === 0xD6) return { tileData: TILE_D6_LOGO_POMME_BC, colorMap: _cmPommeRouge, isMC: false };
+  if (tileCode === 0xD7) return { tileData: TILE_D7_LOGO_POMME_BD, colorMap: _cmPommeRouge, isMC: false };
+  // Logo Gogle : 4 zones de couleur en mode standard
+  //   HG, HC, HD : rouge (haut)
+  //   MG         : jaune (milieu gauche)
+  //   MC, MD     : bleu (milieu centre+droite)
+  //   BG, BC, BD : vert foncé (bas)
+  const _cmGogleRouge = { 0: C64_GREEN_LIGHT, 1: C64_RED };
+  const _cmGogleJaune = { 0: C64_GREEN_LIGHT, 1: C64_YELLOW };
+  const _cmGogleBleu  = { 0: C64_GREEN_LIGHT, 1: C64_BLUE };
+  const _cmGogleVert  = { 0: C64_GREEN_LIGHT, 1: C64_GREEN_DARK };
+  if (tileCode === 0xD8) return { tileData: TILE_D8_LOGO_GOGLE_HG, colorMap: _cmGogleRouge, isMC: false };
+  if (tileCode === 0xD9) return { tileData: TILE_D9_LOGO_GOGLE_HC, colorMap: _cmGogleRouge, isMC: false };
+  if (tileCode === 0xDA) return { tileData: TILE_DA_LOGO_GOGLE_HD, colorMap: _cmGogleRouge, isMC: false };
+  if (tileCode === 0xDB) return { tileData: TILE_DB_LOGO_GOGLE_MG, colorMap: _cmGogleJaune, isMC: false };
+  if (tileCode === 0xDC) return { tileData: TILE_DC_LOGO_GOGLE_MC, colorMap: _cmGogleBleu, isMC: false };
+  if (tileCode === 0xDD) return { tileData: TILE_DD_LOGO_GOGLE_MD, colorMap: _cmGogleBleu, isMC: false };
+  if (tileCode === 0xDE) return { tileData: TILE_DE_LOGO_GOGLE_BG, colorMap: _cmGogleVert, isMC: false };
+  if (tileCode === 0xDF) return { tileData: TILE_DF_LOGO_GOGLE_BC, colorMap: _cmGogleVert, isMC: false };
+  if (tileCode === 0xE0) return { tileData: TILE_E0_LOGO_GOGLE_BD, colorMap: _cmGogleVert, isMC: false };
+  // Logo LeCat : 3 bandes de couleurs (jaune / orange-rose / rouge) en mode standard
+  const _cmLecatJaune  = { 0: C64_GREEN_LIGHT, 1: C64_YELLOW };
+  const _cmLecatOrange = { 0: C64_GREEN_LIGHT, 1: C64_PINK };
+  const _cmLecatRouge  = { 0: C64_GREEN_LIGHT, 1: C64_RED };
+  if (tileCode === 0xE1) return { tileData: TILE_E1_LOGO_LECAT_HG, colorMap: _cmLecatJaune, isMC: false };
+  if (tileCode === 0xE2) return { tileData: TILE_E2_LOGO_LECAT_HC, colorMap: _cmLecatJaune, isMC: false };
+  if (tileCode === 0xE3) return { tileData: TILE_E3_LOGO_LECAT_HD, colorMap: _cmLecatJaune, isMC: false };
+  if (tileCode === 0xE4) return { tileData: TILE_E4_LOGO_LECAT_MG, colorMap: _cmLecatOrange, isMC: false };
+  if (tileCode === 0xE5) return { tileData: TILE_E5_LOGO_LECAT_MC, colorMap: _cmLecatOrange, isMC: false };
+  if (tileCode === 0xE6) return { tileData: TILE_E6_LOGO_LECAT_MD, colorMap: _cmLecatOrange, isMC: false };
+  if (tileCode === 0xE7) return { tileData: TILE_E7_LOGO_LECAT_BG, colorMap: _cmLecatRouge, isMC: false };
+  if (tileCode === 0xE8) return { tileData: TILE_E8_LOGO_LECAT_BC, colorMap: _cmLecatRouge, isMC: false };
+  if (tileCode === 0xE9) return { tileData: TILE_E9_LOGO_LECAT_BD, colorMap: _cmLecatRouge, isMC: false };
+  // Logo Glock : 9 tiles en mode standard, Color RAM = noir
+  const _cmLogoGlock = { 0: C64_GREEN_LIGHT, 1: C64_BLACK };
+  if (tileCode === 0xEA) return { tileData: TILE_EA_LOGO_GLOCK_HG, colorMap: _cmLogoGlock, isMC: false };
+  if (tileCode === 0xEB) return { tileData: TILE_EB_LOGO_GLOCK_HC, colorMap: _cmLogoGlock, isMC: false };
+  if (tileCode === 0xEC) return { tileData: TILE_EC_LOGO_GLOCK_HD, colorMap: _cmLogoGlock, isMC: false };
+  if (tileCode === 0xED) return { tileData: TILE_ED_LOGO_GLOCK_MG, colorMap: _cmLogoGlock, isMC: false };
+  if (tileCode === 0xEE) return { tileData: TILE_EE_LOGO_GLOCK_MC, colorMap: _cmLogoGlock, isMC: false };
+  if (tileCode === 0xEF) return { tileData: TILE_EF_LOGO_GLOCK_MD, colorMap: _cmLogoGlock, isMC: false };
+  if (tileCode === 0xF0) return { tileData: TILE_F0_LOGO_GLOCK_BG, colorMap: _cmLogoGlock, isMC: false };
+  if (tileCode === 0xF1) return { tileData: TILE_F1_LOGO_GLOCK_BC, colorMap: _cmLogoGlock, isMC: false };
+  if (tileCode === 0xF2) return { tileData: TILE_F2_LOGO_GLOCK_BD, colorMap: _cmLogoGlock, isMC: false };
+  // Logo Gwen : 9 tiles en mode standard, Color RAM = mauve/violet
+  const _cmLogoGwen = { 0: C64_GREEN_LIGHT, 1: C64_PURPLE };
+  if (tileCode === 0xF3) return { tileData: TILE_F3_LOGO_GWEN_HG, colorMap: _cmLogoGwen, isMC: false };
+  if (tileCode === 0xF4) return { tileData: TILE_F4_LOGO_GWEN_HC, colorMap: _cmLogoGwen, isMC: false };
+  if (tileCode === 0xF5) return { tileData: TILE_F5_LOGO_GWEN_HD, colorMap: _cmLogoGwen, isMC: false };
+  if (tileCode === 0xF6) return { tileData: TILE_F6_LOGO_GWEN_MG, colorMap: _cmLogoGwen, isMC: false };
+  if (tileCode === 0xF7) return { tileData: TILE_F7_LOGO_GWEN_MC, colorMap: _cmLogoGwen, isMC: false };
+  if (tileCode === 0xF8) return { tileData: TILE_F8_LOGO_GWEN_MD, colorMap: _cmLogoGwen, isMC: false };
+  if (tileCode === 0xF9) return { tileData: TILE_F9_LOGO_GWEN_BG, colorMap: _cmLogoGwen, isMC: false };
+  if (tileCode === 0xFA) return { tileData: TILE_FA_LOGO_GWEN_BC, colorMap: _cmLogoGwen, isMC: false };
+  if (tileCode === 0xFB) return { tileData: TILE_FB_LOGO_GWEN_BD, colorMap: _cmLogoGwen, isMC: false };
+  return null;
+}
+// ============================================
+// Constantes des nouveaux tiles (pour lisibilité)
+// ============================================
+const T_TROTTOIR_H_HAUT = 0xAA;
+const T_TROTTOIR_H_BAS = 0xAB;
+const T_TROTTOIR_V_GAUCHE = 0xAC;
+const T_TROTTOIR_V_DROITE = 0xAD;
+const T_TROTTOIR_PLEIN = 0xAE;
+const T_TROTTOIR_COIN_NO = 0xAF;
+const T_TROTTOIR_COIN_NE = 0xB0;
+const T_CHAMP_BLE = 0xB1;
+const T_CLOTURE_H = 0xB2;
+const T_CLOTURE_V = 0xB3;
+const T_CLOTURE_NO = 0xB4;
+const T_CLOTURE_NE = 0xB5;
+const T_CLOTURE_SO = 0xB6;
+const T_CLOTURE_SE = 0xB7;
+const T_PARKING_HG = 0xB8;
+const T_PARKING_HD = 0xB9;
+const T_PARKING_BG = 0xBA;
+const T_PARKING_BD = 0xBB;
+const T_PANNEAU_PARKING_HG = 0xBC;
+const T_PANNEAU_PARKING_HD = 0xBD;
+const T_PANNEAU_PARKING_BG = 0xBE;
+const T_PANNEAU_PARKING_BD = 0xBF;
+
+// Voiture vue de dessus (2 tiles × 3 tiles)
+const T_VOITURE_HG = 0xC0;
+const T_VOITURE_HD = 0xC1;
+const T_VOITURE_MG = 0xC2;
+const T_VOITURE_MD = 0xC3;
+const T_VOITURE_BG = 0xC4;
+const T_VOITURE_BD = 0xC5;
+
+// Logo CloseAI (3×3 tiles)
+const T_LOGO_CLOSEAI_HG = 0xC6;
+const T_LOGO_CLOSEAI_HC = 0xC7;
+const T_LOGO_CLOSEAI_HD = 0xC8;
+const T_LOGO_CLOSEAI_MG = 0xC9;
+const T_LOGO_CLOSEAI_MC = 0xCA;
+const T_LOGO_CLOSEAI_MD = 0xCB;
+const T_LOGO_CLOSEAI_BG = 0xCC;
+const T_LOGO_CLOSEAI_BC = 0xCD;
+const T_LOGO_CLOSEAI_BD = 0xCE;
+
+// Logo Pomme (3×3 tiles, 3 bandes de couleurs simulant le logo Apple historique)
+const T_LOGO_POMME_HG = 0xCF;
+const T_LOGO_POMME_HC = 0xD0;
+const T_LOGO_POMME_HD = 0xD1;
+const T_LOGO_POMME_MG = 0xD2;
+const T_LOGO_POMME_MC = 0xD3;
+const T_LOGO_POMME_MD = 0xD4;
+const T_LOGO_POMME_BG = 0xD5;
+const T_LOGO_POMME_BC = 0xD6;
+const T_LOGO_POMME_BD = 0xD7;
+
+// Logo Gogle (3×3 tiles, 4 zones de couleurs : rouge haut / jaune gauche / bleu droite / vert bas)
+const T_LOGO_GOGLE_HG = 0xD8;
+const T_LOGO_GOGLE_HC = 0xD9;
+const T_LOGO_GOGLE_HD = 0xDA;
+const T_LOGO_GOGLE_MG = 0xDB;
+const T_LOGO_GOGLE_MC = 0xDC;
+const T_LOGO_GOGLE_MD = 0xDD;
+const T_LOGO_GOGLE_BG = 0xDE;
+const T_LOGO_GOGLE_BC = 0xDF;
+const T_LOGO_GOGLE_BD = 0xE0;
+
+// Logo LeCat (3×3 tiles, 3 bandes : jaune / orange / rouge)
+const T_LOGO_LECAT_HG = 0xE1;
+const T_LOGO_LECAT_HC = 0xE2;
+const T_LOGO_LECAT_HD = 0xE3;
+const T_LOGO_LECAT_MG = 0xE4;
+const T_LOGO_LECAT_MC = 0xE5;
+const T_LOGO_LECAT_MD = 0xE6;
+const T_LOGO_LECAT_BG = 0xE7;
+const T_LOGO_LECAT_BC = 0xE8;
+const T_LOGO_LECAT_BD = 0xE9;
+
+// Logo Glock (3×3 tiles, noir uniforme)
+const T_LOGO_GLOCK_HG = 0xEA;
+const T_LOGO_GLOCK_HC = 0xEB;
+const T_LOGO_GLOCK_HD = 0xEC;
+const T_LOGO_GLOCK_MG = 0xED;
+const T_LOGO_GLOCK_MC = 0xEE;
+const T_LOGO_GLOCK_MD = 0xEF;
+const T_LOGO_GLOCK_BG = 0xF0;
+const T_LOGO_GLOCK_BC = 0xF1;
+const T_LOGO_GLOCK_BD = 0xF2;
+
+// Logo Gwen (3×3 tiles, mauve/violet)
+const T_LOGO_GWEN_HG = 0xF3;
+const T_LOGO_GWEN_HC = 0xF4;
+const T_LOGO_GWEN_HD = 0xF5;
+const T_LOGO_GWEN_MG = 0xF6;
+const T_LOGO_GWEN_MC = 0xF7;
+const T_LOGO_GWEN_MD = 0xF8;
+const T_LOGO_GWEN_BG = 0xF9;
+const T_LOGO_GWEN_BC = 0xFA;
+const T_LOGO_GWEN_BD = 0xFB;
+
+// ============================================================
+// CARTE DU MONDE : 10×6 écrans = 400×150 tiles
+// Composée uniquement avec les tiles ci-dessus, selon
+// carte_monde_v2.html (1 unité SVG = 0.4 tile en X, 0.25 en Y)
+// ============================================================
+const MONDE_W = 400;   // 10 écrans × 40 tiles
+const MONDE_H = 150;   // 6 écrans × 25 tiles
+
+const monde = [];
+const roadMask = [];
+for (let y = 0; y < MONDE_H; y++) {
+  const row = [], rm = [];
+  for (let x = 0; x < MONDE_W; x++) { row.push(T_HERBE); rm.push(false); }
+  monde.push(row); roadMask.push(rm);
+}
+
+function dansMonde(x, y) { return x >= 0 && x < MONDE_W && y >= 0 && y < MONDE_H; }
+function setT(x, y, t) { if (dansMonde(x, y)) monde[y][x] = t; }
+function getT(x, y) { return dansMonde(x, y) ? monde[y][x] : null; }
+
+// ============================================================
+// 1. EAU : rivière diagonale + lac nord-ouest
+//    (auto-tiling avec les tiles lac, comme la scène aquatique)
+// ============================================================
+const waterSet = new Set();
+function addWater(x, y) { if (dansMonde(x, y)) waterSet.add(y * 1000 + x); }
+function isWater(x, y) { return waterSet.has(y * 1000 + x); }
+
+// Rivière : points de contrôle repris du SVG (200,600)→(760,70),
+// prolongée jusqu'au-delà du bord nord-est pour que le fleuve
+// traverse la carte de bord en bord (sud → nord).
+const RIVIERE_PTS = [
+  [80, 150], [128, 120], [168, 95], [200, 75], [224, 55], [260, 35], [304, 17], [350, -5]
+];
+for (let s = 0; s < RIVIERE_PTS.length - 1; s++) {
+  const [ax, ay] = RIVIERE_PTS[s];
+  const [bx, by] = RIVIERE_PTS[s + 1];
+  const steps = Math.max(Math.abs(bx - ax), Math.abs(by - ay));
+  for (let i = 0; i <= steps; i++) {
+    const cx = Math.round(ax + (bx - ax) * i / steps);
+    const cy = Math.round(ay + (by - ay) * i / steps);
+    // Blob 9×7 centré sur le point interpolé → rivière ~5-6 tiles de large
+    for (let dy = -3; dy <= 3; dy++)
+      for (let dx = -4; dx <= 4; dx++)
+        addWater(cx + dx, cy + dy);
+  }
+}
+
+// Lac NO : ellipse centre (72,20), rx=26, ry=9 (comme le SVG)
+for (let y = 10; y <= 30; y++) {
+  for (let x = 44; x <= 100; x++) {
+    const nx = (x - 72) / 26, ny = (y - 20) / 9;
+    if (nx * nx + ny * ny <= 1) addWater(x, y);
+  }
+}
+
+// Auto-tiling : même logique que tileAquaPourPosition, sur prédicat estEau.
+// Le hors-carte compte comme de l'eau : là où le fleuve touche un bord de la
+// carte, aucun trait blanc de rive n'est dessiné (le fleuve continue au-delà).
+function estEau(x, y) {
+  if (x < 0 || x >= MONDE_W || y < 0 || y >= MONDE_H) return true;
+  return isWater(x, y);
+}
+function tileEauPour(x, y) {
+  const up = estEau(x, y - 1), down = estEau(x, y + 1);
+  const left = estEau(x - 1, y), right = estEau(x + 1, y);
+  if (!up && !left && down && right) return T_LAC_NO;
+  if (!up && !right && down && left) return T_LAC_NE;
+  if (!down && !left && up && right) return T_LAC_SO;
+  if (!down && !right && up && left) return T_LAC_SE;
+  if (!up && down && left && right) return T_LAC_BORD_H;
+  if (!down && up && left && right) return T_LAC_BORD_B;
+  if (!left && up && down && right) return T_LAC_BORD_G;
+  if (!right && up && down && left) return T_LAC_BORD_D;
+  if (up && down && left && right) {
+    if (!estEau(x - 1, y - 1)) return T_LAC_CONC_NO;
+    if (!estEau(x + 1, y - 1)) return T_LAC_CONC_NE;
+    if (!estEau(x - 1, y + 1)) return T_LAC_CONC_SO;
+    if (!estEau(x + 1, y + 1)) return T_LAC_CONC_SE;
+    return T_EAU;
+  }
+  return T_EAU;
+}
+for (const key of waterSet) {
+  const y = Math.floor(key / 1000), x = key % 1000;
+  setT(x, y, tileEauPour(x, y));
+}
+
+// ============================================================
+// 2. FORÊTS (mêmes règles que la scène forêt) + clairières
+// ============================================================
+let seed = 20260721;
+function rnd() {
+  seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+  return seed / 0x7fffffff;
+}
+const ARBRES = [T_ARBRE_ROND, T_ARBRE_CONIQUE, T_ARBRE_TOUFFU];
+function unArbre() {
+  const r = rnd();
+  const type = (r < 0.5) ? 0 : (r < 0.8) ? 2 : 1;   // 50% rond, 30% touffu, 20% conique
+  const couleur = (rnd() < 0.7) ? C64_YELLOW : C64_GREEN_DARK;
+  return { tile: ARBRES[type], colorRam: couleur };
+}
+
+function placerForet(x1, y1, x2, y2) {
+  // Lisières irrégulières : les bords du rectangle sont grignotés par une
+  // marche aléatoire (décalage 0-3 par ligne et par colonne), pour que la
+  // forêt ne soit jamais exactement rectangulaire.
+  const offL = {}, offR = {}, offT = {}, offB = {};
+  let a = Math.floor(rnd() * 3), b = Math.floor(rnd() * 3);
+  for (let y = y1; y <= y2; y++) {
+    a = Math.max(0, Math.min(3, a + Math.floor(rnd() * 3) - 1));
+    b = Math.max(0, Math.min(3, b + Math.floor(rnd() * 3) - 1));
+    offL[y] = a; offR[y] = b;
+  }
+  let c = Math.floor(rnd() * 3), d = Math.floor(rnd() * 3);
+  for (let x = x1; x <= x2; x++) {
+    c = Math.max(0, Math.min(3, c + Math.floor(rnd() * 3) - 1));
+    d = Math.max(0, Math.min(3, d + Math.floor(rnd() * 3) - 1));
+    offT[x] = c; offB[x] = d;
+  }
+  for (let y = y1; y <= y2; y++) {
+    for (let x = x1; x <= x2; x++) {
+      if (x < x1 + offL[y] || x > x2 - offR[y]) continue;
+      if (y < y1 + offT[x] || y > y2 - offB[x]) continue;
+      if (getT(x, y) !== T_HERBE) continue;   // ne pas écraser l'eau etc.
+      const proba = ((x + y) % 2 === 0) ? 0.55 : 0.75;
+      if (rnd() < proba) setT(x, y, unArbre());
+    }
+  }
+}
+
+// Clairière : rectangle vert clair uni avec coins damier arrondis
+function placerClairiere(x1, y1, x2, y2) {
+  for (let y = y1; y <= y2; y++) {
+    for (let x = x1; x <= x2; x++) {
+      if (x === x1 && y === y1)      setT(x, y, T_DAMIER_NO);
+      else if (x === x2 && y === y1) setT(x, y, T_DAMIER_NE);
+      else if (x === x1 && y === y2) setT(x, y, T_DAMIER_SO);
+      else if (x === x2 && y === y2) setT(x, y, T_DAMIER_SE);
+      else                            setT(x, y, T_VIDE);
+    }
+  }
+}
+
+placerForet(0, 0, 43, 49);        // F1 : nord-ouest (bord ouest du lac)
+placerForet(352, 0, 399, 44);     // F2 : nord-est (abritera le siège Gwen)
+placerForet(120, 95, 179, 149);   // F3 : sud-centre (traversée par la rivière)
+placerForet(272, 105, 351, 149);  // F4 : sud-est (abritera Lastpeak)
+placerForet(20, 107, 71, 149);    // F5 : sud-ouest
+placerForet(300, 37, 339, 62);    // F6 : au-dessus d'Eastburg
+
+// Quelques clairières
+placerClairiere(12, 14, 20, 20);      // dans F1
+placerClairiere(140, 120, 150, 127);  // dans F3
+placerClairiere(300, 128, 312, 136);  // dans F4
+placerClairiere(36, 124, 46, 131);    // dans F5
+// Clairière de Notre-Dame-de-Bondeville (village en forêt, comme sur le SVG),
+// élargie vers l'ouest pour loger la piscine en L à distance des maisons
+placerClairiere(302, 118, 332, 126);
+// 2 clairières « haut-gauche » de la scène forêt (5×4)
+placerClairiere(388, 30, 392, 33);    // dans F2 (nord-est, sous le siège Gwen)
+placerClairiere(128, 100, 132, 103);  // dans F3 (sud-centre, rive gauche de la rivière)
+// 2 clairières « bas-droite » de la scène forêt (6×4)
+placerClairiere(316, 50, 321, 53);    // dans F6 (le bois au-dessus d'Eastburg)
+placerClairiere(52, 112, 57, 115);    // dans F5 (sud-ouest, près de Gare Sud)
+
+// ============================================================
+// 3. CHAMPS DE BLÉ + ENCLOS + FERMES
+// ============================================================
+function tracerEnclosM(x1, y1, x2, y2) {
+  setT(x1, y1, T_CLOTURE_NO); setT(x2, y1, T_CLOTURE_NE);
+  setT(x1, y2, T_CLOTURE_SO); setT(x2, y2, T_CLOTURE_SE);
+  for (let x = x1 + 1; x <= x2 - 1; x++) { setT(x, y1, T_CLOTURE_H); setT(x, y2, T_CLOTURE_H); }
+  for (let y = y1 + 1; y <= y2 - 1; y++) { setT(x1, y, T_CLOTURE_V); setT(x2, y, T_CLOTURE_V); }
+}
+function placerChamp(x1, y1, x2, y2, jeune) {
+  for (let y = y1; y <= y2; y++)
+    for (let x = x1; x <= x2; x++)
+      setT(x, y, jeune ? { tile: T_CHAMP_BLE, colorRam: C64_GREEN_DARK } : T_CHAMP_BLE);
+}
+
+// Jardin : herbe uniforme autour d'une maison. Ne remplace que l'herbe
+// damier et les arbres — jamais les routes, trottoirs, clôtures ou bâtiments.
+function jardin(x1, y1, x2, y2) {
+  for (let y = y1; y <= y2; y++) {
+    for (let x = x1; x <= x2; x++) {
+      const c = getT(x, y);
+      const estArbre = (typeof c === 'object' && c !== null && ARBRES.indexOf(c.tile) !== -1);
+      if (c === T_HERBE || estArbre) setT(x, y, T_VIDE);
+    }
+  }
+}
+
+// Maisons (mêmes gabarits que la scène maisons ; on ne pose pas les tiles vides)
+// Chaque maison est posée sur un jardin d'herbe uniforme (1 tile de marge autour).
+function placerMaisonE(x, y) {
+  jardin(x - 1, y - 1, x + 2, y + 2);
+  setT(x, y, T_TOIT_PENTE_G); setT(x + 1, y, T_TOIT_PENTE_D);
+  setT(x, y + 1, T_FENETRE);  setT(x + 1, y + 1, T_PORTE);
+}
+function placerMaisonF(x, y) {
+  jardin(x - 1, y - 1, x + 3, y + 2);
+  setT(x, y, T_TOIT_PENTE_G); setT(x + 1, y, T_TOIT_PLEIN); setT(x + 2, y, T_TOIT_PENTE_D);
+  setT(x, y + 1, T_FENETRE);  setT(x + 1, y + 1, T_FENETRE); setT(x + 2, y + 1, T_PORTE);
+}
+function placerMaisonD(x, y) {
+  jardin(x - 1, y - 1, x + 3, y + 4);
+  setT(x + 1, y, T_CHEMINEE);
+  setT(x, y + 1, T_TOIT_PENTE_G); setT(x + 1, y + 1, T_TOIT_PLEIN); setT(x + 2, y + 1, T_TOIT_PENTE_D);
+  setT(x, y + 2, T_FENETRE); setT(x + 1, y + 2, T_FENETRE); setT(x + 2, y + 2, T_FENETRE);
+  setT(x, y + 3, T_MUR_BETON); setT(x + 1, y + 3, T_MUR_BETON); setT(x + 2, y + 3, T_PORTE);
+}
+
+// Champ doré clôturé (nord, entre lac et axe principal vertical)
+tracerEnclosM(107, 23, 128, 38);
+placerChamp(108, 24, 127, 37, false);
+// Champ jeune voisin (sans clôture)
+placerChamp(132, 26, 152, 38, true);
+// Champ doré clôturé (sud-est)
+tracerEnclosM(231, 107, 252, 122);
+placerChamp(232, 108, 251, 121, false);
+// Champ jeune (ouest, sous l'axe principal)
+placerChamp(20, 78, 40, 92, true);
+
+// Ferme 1 (est, au-dessus de l'axe principal)
+tracerEnclosM(280, 55, 292, 64);
+placerMaisonD(283, 57);
+// Ferme 2 (sud, entre Grok et la forêt est)
+tracerEnclosM(240, 132, 250, 139);
+placerMaisonF(243, 134);
+
+// ============================================================
+// 4. ROUTES
+//    Règle de croisement (comme la scène routes) : quand une
+//    route en croise une autre, la cellule devient du bitume nu.
+//    Les routes ne traversent JAMAIS l'eau : elles s'arrêtent
+//    sur la rive (aucun tile de route posé sur une cellule d'eau).
+// ============================================================
+function poserRoute(x, y, tile) {
+  if (!dansMonde(x, y)) return;
+  if (isWater(x, y)) return;   // arrêt au bord de l'eau
+  if (roadMask[y][x]) { monde[y][x] = T_ROUTE_V; return; }
+  monde[y][x] = tile;
+  roadMask[y][x] = true;
+}
+
+// Route simple 1 tile (bitume nu, vertical ou accès)
+function vRoute1(x, y1, y2) { for (let y = y1; y <= y2; y++) poserRoute(x, y, T_ROUTE_V); }
+function hRoute1(x1, x2, y) { for (let x = x1; x <= x2; x++) poserRoute(x, y, T_ROUTE_V); }
+// Route horizontale simple à tirets (tile $41)
+function hRoute1T(x1, x2, y) { for (let x = x1; x <= x2; x++) poserRoute(x, y, T_ROUTE_H); }
+// Route double (2 tiles)
+function hRoute2(x1, x2, y) {
+  for (let x = x1; x <= x2; x++) { poserRoute(x, y, T_ROUTE_HH); poserRoute(x, y + 1, T_ROUTE_HB); }
+}
+function vRoute2(x, y1, y2) {
+  for (let y = y1; y <= y2; y++) { poserRoute(x, y, T_ROUTE_VG); poserRoute(x + 1, y, T_ROUTE_VD); }
+}
+// Axes principaux (4 tiles, tirets centraux — mêmes motifs que la scène routes)
+function hRoute4(x1, x2, y) {
+  for (let x = x1; x <= x2; x++) {
+    poserRoute(x, y, T_ROUTE_HH);
+    const mod = x % 6;
+    if (mod === 1 || mod === 2) {
+      poserRoute(x, y + 1, T_TIRET_HAUT); poserRoute(x, y + 2, T_TIRET_BAS);
+    } else {
+      poserRoute(x, y + 1, T_ROUTE_V); poserRoute(x, y + 2, T_ROUTE_V);
+    }
+    poserRoute(x, y + 3, T_ROUTE_HB);
+  }
+}
+function vRoute4(x, y1, y2) {
+  for (let y = y1; y <= y2; y++) {
+    poserRoute(x, y, T_ROUTE_VG);
+    if (y % 3 === 1) {
+      poserRoute(x + 1, y, T_TIRET_V_GAUCHE); poserRoute(x + 2, y, T_TIRET_V_DROITE);
+    } else {
+      poserRoute(x + 1, y, T_ROUTE_V); poserRoute(x + 2, y, T_ROUTE_V);
+    }
+    poserRoute(x + 3, y, T_ROUTE_VD);
+  }
+}
+
+// --- Liaisons simples (1 tile) ---
+vRoute1(100, 22, 42);        // x=250 : entre route nord et route 2
+vRoute1(216, 22, 70);        // x=540 : route nord → axe principal
+vRoute1(300, 22, 70);        // x=750 nord
+vRoute1(300, 75, 103);       // x=750 sud (axe → route 4)
+vRoute1(224, 75, 103);       // x=560 : axe → route 4
+vRoute1(224, 129, 149);      // x=560 sud (dessert Grok, finit bloquée au bord)
+vRoute1(120, 129, 149);      // x=300 sud
+// Accès des sièges sociaux (culs-de-sac) — enclos agrandis à 32×16
+vRoute1(16, 63, 70);         // Gogle  → axe principal
+vRoute1(229, 0, 2);          // ClosAI → bord nord de la carte (route fantôme…)
+vRoute1(366, 18, 19);        // Gwen   → route nord
+hRoute1(72, 73, 93);         // Pomme  → route x=175
+hRoute1(342, 343, 101);      // LeCat  → route x=860
+hRoute1(223, 223, 144);      // Grok   → route x=560 sud
+
+// --- Routes secondaires (2 tiles) ---
+hRoute2(0, 399, 20);         // y=80  : route nord (digue sur le lac)
+hRoute2(0, 399, 43);         // y=175 : route 2
+hRoute2(0, 119, 104);        // y=420 ouest
+vRoute2(118, 86, 103);       // jog x=295 (remonte vers y=340)
+hRoute2(118, 265, 84);       // y=340 centre
+hRoute2(264, 399, 104);      // y=420 est
+hRoute2(0, 399, 127);        // y=510 : route sud
+vRoute2(70, 0, 149);         // x=175 : verticale ouest (traverse lac + Vestone)
+vRoute2(264, 0, 149);        // x=660 : verticale est
+vRoute2(344, 0, 149);        // x=860 : verticale extrême est
+
+// --- Axes principaux (4 tiles, en dernier = prioritaires) ---
+vRoute4(170, 0, 149);        // x=430
+hRoute4(0, 399, 71);         // y=290
+
+// ============================================================
+// 5. TROTTOIRS des zones urbaines (idiome de la scène trottoirs)
+// ============================================================
+function trottoirH(x1, x2, y, tile) {
+  for (let x = x1; x <= x2; x++) {
+    if (!dansMonde(x, y) || roadMask[y][x]) continue;
+    monde[y][x] = (dansMonde(x - 1, y) && roadMask[y][x - 1]) || (dansMonde(x + 1, y) && roadMask[y][x + 1])
+      ? T_TROTTOIR_PLEIN : tile;
+  }
+}
+function trottoirV(x, y1, y2, tile) {
+  for (let y = y1; y <= y2; y++) {
+    if (!dansMonde(x, y) || roadMask[y][x]) continue;
+    monde[y][x] = (dansMonde(x, y - 1) && roadMask[y - 1][x]) || (dansMonde(x, y + 1) && roadMask[y + 1][x])
+      ? T_TROTTOIR_PLEIN : tile;
+  }
+}
+
+// Vestone (au sud de la route y=175, au nord de l'axe principal)
+trottoirH(42, 102, 45, T_TROTTOIR_H_HAUT);   // sous la route 2
+trottoirH(42, 102, 70, T_TROTTOIR_H_BAS);    // au-dessus de l'axe principal
+trottoirV(69, 46, 69, T_TROTTOIR_V_DROITE);  // à gauche de la rue x=175
+trottoirV(72, 46, 69, T_TROTTOIR_V_GAUCHE);  // à droite
+
+// Eastburg (autour de l'axe principal)
+trottoirH(298, 342, 70, T_TROTTOIR_H_BAS);
+trottoirH(298, 342, 75, T_TROTTOIR_H_HAUT);
+
+// ============================================================
+// 6. BÂTIMENTS URBAINS (barres d'immeubles de la scène immeubles)
+// ============================================================
+function placerBarreA(x, y) {
+  setT(x + 2, y, T_ANTENNE_S);
+  for (let c = 0; c < 6; c++) setT(x + c, y + 1, T_TOIT_IMM);
+  for (let r = 2; r <= 4; r++)
+    for (let c = 0; c < 6; c++) setT(x + c, y + r, (c % 2 === 0) ? T_MUR_BETON : T_FENETRE_B);
+  setT(x, y + 5, T_FENETRE_B); setT(x + 1, y + 5, T_MUR_BETON); setT(x + 2, y + 5, T_PORTE);
+  setT(x + 3, y + 5, T_MUR_BETON); setT(x + 4, y + 5, T_PORTE); setT(x + 5, y + 5, T_FENETRE_B);
+}
+function placerBarreB(x, y) {
+  setT(x + 1, y, T_ANTENNE_R); setT(x + 4, y, T_ANTENNE_S);
+  for (let c = 0; c < 6; c++) setT(x + c, y + 1, T_TOIT_IMM);
+  for (let r = 2; r <= 4; r++)
+    for (let c = 0; c < 6; c++) setT(x + c, y + r, T_FENETRE_B);
+  setT(x, y + 5, T_FENETRE_B); setT(x + 1, y + 5, T_MUR_BETON); setT(x + 2, y + 5, T_PORTE);
+  setT(x + 3, y + 5, T_PORTE); setT(x + 4, y + 5, T_MUR_BETON); setT(x + 5, y + 5, T_FENETRE_B);
+}
+function placerBarreD(x, y) {
+  setT(x + 1, y, T_ANTENNE_S); setT(x + 4, y, T_ANTENNE_R); setT(x + 7, y, T_ANTENNE_S);
+  for (let c = 0; c < 8; c++) setT(x + c, y + 1, T_TOIT_IMM);
+  for (let r = 2; r <= 4; r++)
+    for (let c = 0; c < 8; c++) setT(x + c, y + r, (c % 2 === 0) ? T_MUR_BETON : T_FENETRE_B);
+  setT(x, y + 5, T_FENETRE_B); setT(x + 1, y + 5, T_MUR_BETON); setT(x + 2, y + 5, T_PORTE);
+  setT(x + 3, y + 5, T_MUR_BETON); setT(x + 4, y + 5, T_MUR_BETON); setT(x + 5, y + 5, T_PORTE);
+  setT(x + 6, y + 5, T_MUR_BETON); setT(x + 7, y + 5, T_FENETRE_B);
+}
+
+// ============================================================
+// GRAND IMMEUBLE / HÔPITAL / MAIRIE — portage fidèle du
+// placerBatiment de la scène « Grand bâtiment générique » :
+// 28 tiles de large × 7 rows (toit + 4 étages + RDC 2 rows).
+// Options : avecCroix (hôpital), avecGarages (RDC à garages),
+// avecFronton (mairie : fronton + drapeau bleu-blanc-rouge).
+// ============================================================
+const RDC_GRAND = [
+  [0, 'M'], [1, 'G3'], [4, 'F'], [5, 'M'], [6, 'P'], [7, 'M'],
+  [8, 'G3'], [11, 'F'], [12, 'P'], [13, 'M'], [14, 'G3'],
+  [17, 'F'], [18, 'M'], [19, 'P'], [20, 'M'], [21, 'F'],
+  [22, 'G3'], [25, 'M'], [26, 'M'], [27, 'M']
+];
+function placerGrandImmeuble(bx, by, options = {}) {
+  const { avecCroix = false, avecGarages = true, avecFronton = false } = options;
+  const BW = 28;
+  for (let dx = 0; dx < BW; dx++) setT(bx + dx, by, T_TOIT_PLEIN);
+  for (let etage = 1; etage <= 4; etage++)
+    for (let dx = 0; dx < BW; dx++)
+      setT(bx + dx, by + etage, (dx % 2 === 0) ? T_MUR_BETON : T_FENETRE_B);
+  if (avecCroix) {
+    setT(bx + 3, by + 2, T_CROIX_HG); setT(bx + 4, by + 2, T_CROIX_HD);
+    setT(bx + 3, by + 3, T_CROIX_BG); setT(bx + 4, by + 3, T_CROIX_BD);
+  }
+  const rowHaut = by + 5, rowBas = by + 6;
+  if (avecGarages) {
+    for (const [col, type] of RDC_GRAND) {
+      const x = bx + col;
+      if (type === 'G3') {
+        setT(x, rowHaut, T_GARAGE_HG); setT(x + 1, rowHaut, T_GARAGE_HM); setT(x + 2, rowHaut, T_GARAGE_HD);
+        setT(x, rowBas, T_GARAGE_BG); setT(x + 1, rowBas, T_GARAGE_BM); setT(x + 2, rowBas, T_GARAGE_BD);
+      } else if (type === 'P') {
+        setT(x, rowHaut, T_MUR_BETON); setT(x, rowBas, T_PORTE);
+      } else if (type === 'F') {
+        setT(x, rowHaut, T_FENETRE_B); setT(x, rowBas, T_MUR_BETON);
+      } else {
+        setT(x, rowHaut, T_MUR_BETON); setT(x, rowBas, T_MUR_BETON);
+      }
+    }
+  } else {
+    for (let dx = 0; dx < BW; dx++) {
+      setT(bx + dx, rowHaut, (dx % 2 === 0) ? T_MUR_BETON : T_FENETRE_B);
+      setT(bx + dx, rowBas, T_MUR_BETON);
+    }
+    for (const col of [6, 13, 21]) setT(bx + col, rowBas, T_PORTE);
+  }
+  if (avecFronton) {
+    const FR_W = 10;
+    const frX = bx + Math.floor((BW - FR_W) / 2);
+    for (let dx = 0; dx < FR_W; dx++) setT(frX + dx, by - 1, (dx % 2 === 0) ? T_MUR_BETON : T_FENETRE_B);
+    for (let dx = 0; dx < FR_W; dx++) setT(frX + dx, by - 2, T_TOIT_PLEIN);
+    const dX = bx + Math.floor(BW / 2) - 1;
+    setT(dX, by - 3, { tile: T_PLEIN, colorRam: C64_BLUE });
+    setT(dX + 1, by - 3, { tile: T_PLEIN, colorRam: C64_WHITE });
+    setT(dX + 2, by - 3, { tile: T_PLEIN, colorRam: C64_RED });
+  }
+}
+
+// Grand bâtiment public : toit rouge + étage + RDC avec portes/garages (5 rows)
+function placerGrandBatiment(x, y, w, garages) {
+  for (let c = 0; c < w; c++) setT(x + c, y, T_TOIT_PLEIN);
+  for (let r = 1; r <= 2; r++)
+    for (let c = 0; c < w; c++) setT(x + c, y + r, (c % 2 === 0) ? T_MUR_BETON : T_FENETRE_B);
+  for (let c = 0; c < w; c++) { setT(x + c, y + 3, T_MUR_BETON); setT(x + c, y + 4, T_MUR_BETON); }
+  for (const g of garages) {
+    setT(x + g, y + 3, T_GARAGE_HG); setT(x + g + 1, y + 3, T_GARAGE_HM); setT(x + g + 2, y + 3, T_GARAGE_HD);
+    setT(x + g, y + 4, T_GARAGE_BG); setT(x + g + 1, y + 4, T_GARAGE_BM); setT(x + g + 2, y + 4, T_GARAGE_BD);
+  }
+  setT(x + Math.floor(w / 2), y + 4, T_PORTE);
+  setT(x + 1, y + 4, T_PORTE); setT(x + w - 2, y + 4, T_PORTE);
+}
+
+// Parkings + voitures (idiome de la scène parkings)
+function tracerZoneParkingM(x1, y1, x2, y2) {
+  for (let y = y1; y <= y2; y++)
+    for (let x = x1; x <= x2; x++) setT(x, y, T_ROUTE_V);
+  for (let px = x1; px <= x2 - 1; px += 2) {
+    setT(px, y1, T_PARKING_HG); setT(px + 1, y1, T_PARKING_HD);
+    setT(px, y1 + 1, T_PARKING_BG); setT(px + 1, y1 + 1, T_PARKING_BD);
+    setT(px, y1 + 2, T_PARKING_BG); setT(px + 1, y1 + 2, T_PARKING_BD);
+  }
+}
+function garerVoitureM(x, y, couleur) {
+  setT(x, y, { tile: T_VOITURE_HG, colorRam: couleur }); setT(x + 1, y, { tile: T_VOITURE_HD, colorRam: couleur });
+  setT(x, y + 1, { tile: T_VOITURE_MG, colorRam: couleur }); setT(x + 1, y + 1, { tile: T_VOITURE_MD, colorRam: couleur });
+  setT(x, y + 2, { tile: T_VOITURE_BG, colorRam: couleur }); setT(x + 1, y + 2, { tile: T_VOITURE_BD, colorRam: couleur });
+}
+
+// Panneau sens interdit + poteau, feu tricolore
+function panneauStop(x, y) { setT(x, y, T_STOP); setT(x, y + 1, T_POTEAU); }
+function feu(x, y, etat) {
+  const haut = (etat === 'rouge') ? T_FEU_H_ROUGE : (etat === 'orange') ? T_FEU_H_ORANGE : T_FEU_H_VERT;
+  setT(x, y, haut);
+  setT(x, y + 1, (etat === 'vert') ? T_FEU_B_VERT : T_FEU_B_ETEINT);
+}
+
+// Écriture de texte (lettres $90-$A9) — couleurs : null, une couleur, ou tableau par lettre
+function ecrire(x, y, texte, couleurs) {
+  const codeA = 'A'.charCodeAt(0);
+  const t = texte.toUpperCase();
+  for (let i = 0; i < t.length; i++) {
+    const c = t.charCodeAt(i);
+    if (c === 32) { setT(x + i, y, T_VIDE); continue; }
+    if (c < codeA || c > codeA + 25) continue;
+    const tile = 0x90 + (c - codeA);
+    const col = Array.isArray(couleurs) ? couleurs[i % couleurs.length] : couleurs;
+    setT(x + i, y, col ? { tile: tile, colorRam: col } : tile);
+  }
+}
+
+// ============================================================
+// 7. VILLES
+// ============================================================
+// --- ROUEN (ex-Vestone) ---
+ecrire(47, 41, "ROUEN", null);
+placerBarreA(44, 47);
+placerBarreB(52, 47);
+placerMaisonD(45, 55);
+placerMaisonE(52, 57);
+placerMaisonF(58, 57);
+placerMaisonE(62, 47);
+tracerZoneParkingM(76, 47, 91, 52);
+garerVoitureM(76, 47, C64_RED);
+garerVoitureM(80, 47, C64_BLUE);
+garerVoitureM(86, 47, C64_YELLOW);
+placerBarreD(74, 56);
+placerMaisonF(86, 58);
+placerMaisonE(92, 58);
+placerMaisonF(94, 63);
+feu(68, 41, 'rouge');
+feu(73, 66, 'vert');
+// Grand immeuble à côté du parking de Rouen (côté est, 1 case d'écart :
+// un parking ne touche pas un bâtiment)
+placerGrandImmeuble(93, 47, {});
+// Mairie de Rouen : juste au sud de l'axe principal, le long de la route x=175
+placerGrandImmeuble(42, 79, { avecGarages: false, avecFronton: true });
+
+// --- MONT-SAINT-AIGNAN (ex-Eastburg) — pas de tiret dans la police, on espace
+ecrire(304, 63, "MONT SAINT AIGNAN", null);
+placerMaisonD(306, 65);
+placerMaisonE(312, 67);
+placerMaisonF(318, 67);
+placerMaisonE(326, 67);
+placerMaisonF(332, 67);
+// Grand immeuble à côté du parking de Mont-Saint-Aignan (côté ouest,
+// 1 case d'écart avec le parking)
+placerGrandImmeuble(297, 76, {});
+tracerZoneParkingM(326, 77, 341, 82);
+garerVoitureM(328, 77, C64_GREEN_DARK);
+garerVoitureM(334, 77, C64_CYAN);
+garerVoitureM(338, 77, C64_BLACK);
+placerMaisonE(304, 84);
+placerMaisonF(310, 84);
+feu(267, 69, 'vert');
+feu(295, 76, 'orange');
+// Mairie de Mont-Saint-Aignan : de l'autre côté de la route x=860
+placerGrandImmeuble(350, 79, { avecGarages: false, avecFronton: true });
+
+// --- GARE CENTRALE ---
+ecrire(140, 62, "GARE CENTRALE", null);
+placerGrandBatiment(138, 64, 18, [3, 12]);
+tracerZoneParkingM(124, 65, 135, 70);
+garerVoitureM(124, 65, C64_BLUE);
+garerVoitureM(128, 65, C64_BLACK);
+garerVoitureM(132, 65, C64_RED);
+// Grand immeuble à côté du parking de la gare (au-dessus, avec un écart :
+// il ne touche ni le parking ni le bâtiment de la gare)
+placerGrandImmeuble(108, 56, {});
+feu(169, 69, 'rouge');
+feu(169, 75, 'orange');
+feu(174, 75, 'vert');
+
+// --- CASERNE DE POMPIERS ---
+ecrire(242, 62, "POMPIERS", C64_RED);
+placerGrandBatiment(240, 64, 12, [2, 7]);
+setT(236, 66, T_ROUTE_V); setT(237, 66, T_ROUTE_V);
+setT(236, 67, T_ROUTE_V); setT(237, 67, T_ROUTE_V);
+setT(236, 68, T_ROUTE_V); setT(237, 68, T_ROUTE_V);
+garerVoitureM(236, 66, C64_RED);   // camion de pompiers
+
+// --- HÔPITAL (près de la caserne, juste de l'autre côté de l'axe principal) ---
+// Grand immeuble avec la croix-rouge 2×2 en haut à gauche, comme dans la scène
+ecrire(236, 75, "HOPITAL", C64_RED);
+placerGrandImmeuble(226, 77, { avecCroix: true });
+
+// --- GARE SUD ---
+ecrire(40, 93, "GARE SUD", null);
+placerGrandBatiment(38, 95, 13, [5]);
+setT(54, 96, T_ROUTE_V); setT(55, 96, T_ROUTE_V);
+setT(54, 97, T_ROUTE_V); setT(55, 97, T_ROUTE_V);
+setT(54, 98, T_ROUTE_V); setT(55, 98, T_ROUTE_V);
+garerVoitureM(54, 96, C64_BLUE);
+
+// ============================================================
+// 8. VILLAGES
+// ============================================================
+// Darnetal (ex-Moulinets, nord-centre)
+ecrire(198, 14, "DARNETAL", null);
+placerMaisonD(198, 15);
+placerMaisonE(204, 17);
+placerMaisonF(208, 17);
+// Sotteville (ex-Grandfond, sud-ouest)
+ecrire(86, 107, "SOTTEVILLE", null);
+placerMaisonD(86, 108);
+placerMaisonF(92, 110);
+placerMaisonE(98, 110);
+// Bois-Guillaume (ex-Carrefour, centre) — pas de tiret dans la police.
+// Village décalé à l'est du coude du fleuve : ni nom ni maison ne touche l'eau.
+ecrire(194, 87, "BOIS GUILLAUME", null);
+placerMaisonF(194, 89);
+placerMaisonE(200, 89);
+placerMaisonE(204, 89);
+// Maromme (ex-Hauteville, nord-est) — les maisons E et F sont à l'ouest
+// de la maison D, à distance de la rive du fleuve.
+ecrire(280, 14, "MAROMME", null);
+placerMaisonD(280, 15);
+placerMaisonE(270, 17);
+placerMaisonF(274, 17);
+// Notre-Dame-de-Bondeville (ex-Lastpeak, dans la clairière de la forêt sud-est)
+// Nom trop long pour une ligne : écrit sur deux lignes, sans tirets
+ecrire(312, 119, "NOTRE DAME DE", null);
+ecrire(312, 120, "BONDEVILLE", null);
+placerMaisonF(312, 121);
+placerMaisonE(318, 121);
+placerMaisonE(322, 121);
+placerMaisonF(326, 121);
+
+// ============================================================
+// 9. SIÈGES SOCIAUX IA (enclos + logo 3×3 + nom + cul-de-sac)
+// ============================================================
+function poserLogo3x3(x, y, tiles) {
+  for (let i = 0; i < 9; i++) setT(x + (i % 3), y + Math.floor(i / 3), tiles[i]);
+}
+const LOGO_GOGLE = [T_LOGO_GOGLE_HG, T_LOGO_GOGLE_HC, T_LOGO_GOGLE_HD, T_LOGO_GOGLE_MG, T_LOGO_GOGLE_MC, T_LOGO_GOGLE_MD, T_LOGO_GOGLE_BG, T_LOGO_GOGLE_BC, T_LOGO_GOGLE_BD];
+const LOGO_CLOSEAI = [T_LOGO_CLOSEAI_HG, T_LOGO_CLOSEAI_HC, T_LOGO_CLOSEAI_HD, T_LOGO_CLOSEAI_MG, T_LOGO_CLOSEAI_MC, T_LOGO_CLOSEAI_MD, T_LOGO_CLOSEAI_BG, T_LOGO_CLOSEAI_BC, T_LOGO_CLOSEAI_BD];
+const LOGO_GWEN = [T_LOGO_GWEN_HG, T_LOGO_GWEN_HC, T_LOGO_GWEN_HD, T_LOGO_GWEN_MG, T_LOGO_GWEN_MC, T_LOGO_GWEN_MD, T_LOGO_GWEN_BG, T_LOGO_GWEN_BC, T_LOGO_GWEN_BD];
+const LOGO_POMME = [T_LOGO_POMME_HG, T_LOGO_POMME_HC, T_LOGO_POMME_HD, T_LOGO_POMME_MG, T_LOGO_POMME_MC, T_LOGO_POMME_MD, T_LOGO_POMME_BG, T_LOGO_POMME_BC, T_LOGO_POMME_BD];
+const LOGO_LECAT = [T_LOGO_LECAT_HG, T_LOGO_LECAT_HC, T_LOGO_LECAT_HD, T_LOGO_LECAT_MG, T_LOGO_LECAT_MC, T_LOGO_LECAT_MD, T_LOGO_LECAT_BG, T_LOGO_LECAT_BC, T_LOGO_LECAT_BD];
+const LOGO_GLOCK = [T_LOGO_GLOCK_HG, T_LOGO_GLOCK_HC, T_LOGO_GLOCK_HD, T_LOGO_GLOCK_MG, T_LOGO_GLOCK_MC, T_LOGO_GLOCK_MD, T_LOGO_GLOCK_BG, T_LOGO_GLOCK_BC, T_LOGO_GLOCK_BD];
+
+// Enclos 32×16 avec intérieur vert clair uni + logo + nom + grand immeuble + entrée.
+// Layout vertical : clôture (y1), logo (y1+2..y1+4), nom (y1+6),
+// grand immeuble 28×7 centré (y1+7..y1+13), marge (y1+14), clôture (y2=y1+15).
+function placerHQ(x1, y1, x2, y2, logo, nom, couleursNom, entree) {
+  for (let y = y1 + 1; y <= y2 - 1; y++)
+    for (let x = x1 + 1; x <= x2 - 1; x++) setT(x, y, T_VIDE);
+  tracerEnclosM(x1, y1, x2, y2);
+  const cx = Math.floor((x1 + x2) / 2);
+  poserLogo3x3(cx - 1, y1 + 2, logo);
+  ecrire(cx - Math.floor(nom.length / 2), y1 + 6, nom, couleursNom);
+  // Le grand immeuble du siège (28 tiles, centré dans l'enclos de 32)
+  placerGrandImmeuble(x1 + 2, y1 + 7, {});
+  // Entrée : on remplace la clôture par du bitume
+  setT(entree[0], entree[1], T_ROUTE_V);
+}
+
+// GOGLE (nord-ouest) — lettres multicolores (couleurs foncées, lisibles sur l'herbe)
+placerHQ(4, 47, 35, 62, LOGO_GOGLE, "GOGLE HQ",
+  [C64_RED, C64_BLUE, C64_GREEN_DARK, C64_PURPLE, C64_RED, null, C64_BLACK, C64_BLACK], [16, 62]);
+panneauStop(14, 64);
+
+// CLOSAI (nord-centre) — accès uniquement depuis le bord de la carte, bloqué
+placerHQ(214, 3, 245, 18, LOGO_CLOSEAI, "CLOSAI HQ", C64_BLACK, [229, 3]);
+panneauStop(227, 0);
+
+// GWEN (nord-est, dans la forêt)
+placerHQ(356, 2, 387, 17, LOGO_GWEN, "GWEN HQ", C64_PURPLE, [366, 17]);
+panneauStop(364, 18);
+
+// POMME (centre-ouest)
+placerHQ(74, 79, 105, 94, LOGO_POMME, "POMME HQ",
+  [C64_GREEN_DARK, C64_GREEN_DARK, C64_RED, C64_RED, C64_RED, null, C64_BLACK, C64_BLACK], [74, 93]);
+panneauStop(73, 91);
+
+// LECAT (est)
+placerHQ(310, 87, 341, 102, LOGO_LECAT, "LECAT HQ",
+  [C64_RED, C64_RED, C64_RED, C64_RED, C64_RED, null, C64_BLACK, C64_BLACK], [341, 101]);
+panneauStop(342, 99);
+
+// GROK (sud-centre)
+placerHQ(191, 130, 222, 145, LOGO_GLOCK, "GROK HQ", C64_BLACK, [222, 144]);
+panneauStop(223, 142);
+// Bout de route bloqué au bord sud (comme sur le SVG)
+panneauStop(226, 147);
+
+// ============================================================
+// 9bis. PISCINES & LACS LOCAUX
+//       Formes et auto-tiling repris de la scène
+//       « Aquatique : 2 piscines + 2 lacs » du fichier tiles.
+// ============================================================
+function dansZones(x, y, zones) {
+  for (const z of zones) {
+    if (x >= z.x && x < z.x + z.w && y >= z.y && y < z.y + z.h) return true;
+  }
+  return false;
+}
+// Même sélection de tile que tileAquaPourPosition de la scène aquatique
+function tilePlanEau(x, y, zones, type) {
+  const lac = (type === 'lac');
+  const up = dansZones(x, y - 1, zones), down = dansZones(x, y + 1, zones);
+  const left = dansZones(x - 1, y, zones), right = dansZones(x + 1, y, zones);
+  const coinNO = lac ? T_LAC_NO : T_PISC_NO, coinNE = lac ? T_LAC_NE : T_PISC_NE;
+  const coinSO = lac ? T_LAC_SO : T_PISC_SO, coinSE = lac ? T_LAC_SE : T_PISC_SE;
+  const concNO = lac ? T_LAC_CONC_NO : T_PISC_CONC_NO, concNE = lac ? T_LAC_CONC_NE : T_PISC_CONC_NE;
+  const concSO = lac ? T_LAC_CONC_SO : T_PISC_CONC_SO, concSE = lac ? T_LAC_CONC_SE : T_PISC_CONC_SE;
+  const bordH = lac ? T_LAC_BORD_H : T_PISC_BORD_H, bordB = lac ? T_LAC_BORD_B : T_PISC_BORD_B;
+  const bordG = lac ? T_LAC_BORD_G : T_PISC_BORD_G, bordD = lac ? T_LAC_BORD_D : T_PISC_BORD_D;
+  if (!up && !left && down && right) return coinNO;
+  if (!up && !right && down && left) return coinNE;
+  if (!down && !left && up && right) return coinSO;
+  if (!down && !right && up && left) return coinSE;
+  if (!up && down && left && right) return bordH;
+  if (!down && up && left && right) return bordB;
+  if (!left && up && down && right) return bordG;
+  if (!right && up && down && left) return bordD;
+  if (up && down && left && right) {
+    if (!dansZones(x - 1, y - 1, zones)) return concNO;
+    if (!dansZones(x + 1, y - 1, zones)) return concNE;
+    if (!dansZones(x - 1, y + 1, zones)) return concSO;
+    if (!dansZones(x + 1, y + 1, zones)) return concSE;
+  }
+  return T_EAU;
+}
+function placerPlanEau(zones, type) {
+  for (const z of zones) {
+    for (let dy = 0; dy < z.h; dy++) {
+      for (let dx = 0; dx < z.w; dx++) {
+        const x = z.x + dx, y = z.y + dy;
+        setT(x, y, tilePlanEau(x, y, zones, type));
+        addWater(x, y);   // cohérent avec la règle « pas de route sur l'eau »
+      }
+    }
+  }
+}
+
+// Piscine rectangulaire (6×4, comme PISCINE 1) à côté de la caserne des pompiers
+placerPlanEau([{ x: 254, y: 64, w: 6, h: 4 }], 'piscine');
+
+// Piscine rectangulaire près de la maison de la ferme de l'écran (8,3),
+// à l'intérieur de l'enclos (1 case de pelouse entre la maison et l'eau :
+// un bâtiment ne touche jamais l'eau)
+placerPlanEau([{ x: 287, y: 58, w: 4, h: 4 }], 'piscine');
+
+// Piscine en L (même construction que PISCINE 2) dans la ville de
+// Notre-Dame-de-Bondeville, côté ouest de la clairière, à distance
+// des maisons (un bâtiment ne touche jamais l'eau)
+placerPlanEau([
+  { x: 303, y: 119, w: 3, h: 5 },
+  { x: 303, y: 122, w: 6, h: 3 }
+], 'piscine');
+
+// Lac « banane large » (LAC 1, bas-gauche de la scène aquatique)
+// au-dessus de la Gare Centrale — mêmes 3 zones en escalier
+placerPlanEau([
+  { x: 136, y: 48, w: 10, h: 4 },
+  { x: 140, y: 50, w: 10, h: 4 },
+  { x: 144, y: 52, w: 8, h: 3 }
+], 'lac');
+
+// Lac « haricot » (LAC 2, bas-droite de la scène aquatique) à Grandfond,
+// juste au sud du village — mêmes 3 zones
+placerPlanEau([
+  { x: 86, y: 115, w: 6, h: 5 },
+  { x: 90, y: 117, w: 6, h: 4 },
+  { x: 88, y: 119, w: 5, h: 3 }
+], 'lac');
+
+// ============================================================
+// 10. VOITURES SUR LES ROUTES + PANNEAUX ÉPARS
+// ============================================================
+garerVoitureM(171, 26, C64_YELLOW);    // axe principal vertical
+garerVoitureM(171, 112, C64_CYAN);
+garerVoitureM(70, 90, C64_BLACK);      // x=175
+garerVoitureM(264, 55, C64_BLUE);      // x=660
+garerVoitureM(264, 132, C64_RED);
+garerVoitureM(344, 40, C64_GREEN_DARK);// x=860
+
+// ============================================================
+// 11. ARBRES ÉPARS dans la campagne (loin des routes)
+// ============================================================
+function presDeRoute(x, y) {
+  for (let dy = -1; dy <= 1; dy++)
+    for (let dx = -1; dx <= 1; dx++) {
+      const nx = x + dx, ny = y + dy;
+      if (dansMonde(nx, ny) && roadMask[ny][nx]) return true;
+    }
+  return false;
+}
+for (let y = 0; y < MONDE_H; y++) {
+  for (let x = 0; x < MONDE_W; x++) {
+    if (monde[y][x] !== T_HERBE) continue;
+    if (presDeRoute(x, y)) continue;
+    if (rnd() < 0.02) monde[y][x] = unArbre();
+  }
+}
+
+// ============================================================
+// 12. RENDU (ImageData : 1 pixel C64 = 1 pixel canvas)
+// ============================================================
+const rgbCache = {};
+function rgb(couleur) {
+  if (!rgbCache[couleur]) {
+    rgbCache[couleur] = [
+      parseInt(couleur.slice(1, 3), 16),
+      parseInt(couleur.slice(3, 5), 16),
+      parseInt(couleur.slice(5, 7), 16)
+    ];
+  }
+  return rgbCache[couleur];
+}
+
+const mapCanvas = document.getElementById('mapCanvas');
+const mapCtx = mapCanvas.getContext('2d');
+const img = mapCtx.createImageData(MONDE_W * 8, MONDE_H * 8);
+const data = img.data;
+const LARGEUR_PX = MONDE_W * 8;
+
+for (let ty = 0; ty < MONDE_H; ty++) {
+  for (let tx = 0; tx < MONDE_W; tx++) {
+    const info = getTileInfo(monde[ty][tx]);
+    if (!info) continue;
+    const { tileData, colorMap, isMC } = info;
+    for (let row = 0; row < 8; row++) {
+      const byte = tileData[row];
+      const py = ty * 8 + row;
+      if (isMC) {
+        for (let pair = 0; pair < 4; pair++) {
+          const bits = (byte >> ((3 - pair) * 2)) & 0b11;
+          const [r, g, b] = rgb(colorMap[bits]);
+          const px = tx * 8 + pair * 2;
+          for (let k = 0; k < 2; k++) {
+            const idx = (py * LARGEUR_PX + px + k) * 4;
+            data[idx] = r; data[idx + 1] = g; data[idx + 2] = b; data[idx + 3] = 255;
+          }
+        }
+      } else {
+        for (let col = 0; col < 8; col++) {
+          const bit = (byte >> (7 - col)) & 0b1;
+          const [r, g, b] = rgb(colorMap[bit]);
+          const idx = (py * LARGEUR_PX + tx * 8 + col) * 4;
+          data[idx] = r; data[idx + 1] = g; data[idx + 2] = b; data[idx + 3] = 255;
+        }
+      }
+    }
+  }
+}
+mapCtx.putImageData(img, 0, 0);
+
+// ============================================================
+// 13. GRILLE DES ÉCRANS + ZOOM + LOUPE
+// ============================================================
+const gridCanvas = document.getElementById('gridCanvas');
+const gridCtx = gridCanvas.getContext('2d');
+function dessinerGrille(visible) {
+  gridCtx.clearRect(0, 0, gridCanvas.width, gridCanvas.height);
+  if (!visible) return;
+  gridCtx.strokeStyle = 'rgba(255,80,80,0.55)';
+  gridCtx.lineWidth = 2;
+  for (let i = 1; i < 10; i++) {
+    gridCtx.beginPath(); gridCtx.moveTo(i * 320, 0); gridCtx.lineTo(i * 320, 1200); gridCtx.stroke();
+  }
+  for (let j = 1; j < 6; j++) {
+    gridCtx.beginPath(); gridCtx.moveTo(0, j * 200); gridCtx.lineTo(3200, j * 200); gridCtx.stroke();
+  }
+  gridCtx.font = 'bold 22px monospace';
+  gridCtx.fillStyle = 'rgba(255,255,255,0.5)';
+  for (let j = 0; j < 6; j++)
+    for (let i = 0; i < 10; i++)
+      gridCtx.fillText((i + 1) + ',' + (j + 1), i * 320 + 8, j * 200 + 26);
+}
+dessinerGrille(true);
+document.getElementById('chkGrid').addEventListener('change', e => dessinerGrille(e.target.checked));
+
+// Zoom (largeur CSS des canvases)
+const wrapper = document.getElementById('wrapper');
+const boutons = { btnFit: null, btn100: 3200, btn200: 6400 };
+function setZoom(id) {
+  for (const b of Object.keys(boutons)) document.getElementById(b).classList.toggle('actif', b === id);
+  const w = boutons[id];
+  const largeur = w ? w + 'px' : '100%';
+  mapCanvas.style.width = largeur;
+  gridCanvas.style.width = largeur;
+  mapCanvas.style.height = 'auto';
+  gridCanvas.style.height = 'auto';
+}
+for (const b of Object.keys(boutons)) {
+  document.getElementById(b).addEventListener('click', () => setZoom(b));
+}
+setZoom('btnFit');
+
+// Loupe ×4 (8×8 tiles autour du curseur)
+const loupe = document.getElementById('loupe');
+const loupeCtx = loupe.getContext('2d');
+loupeCtx.imageSmoothingEnabled = false;
+mapCanvas.addEventListener('mousemove', e => {
+  const rect = mapCanvas.getBoundingClientRect();
+  const scale = rect.width / (MONDE_W * 8);
+  const px = (e.clientX - rect.left) / scale;
+  const py = (e.clientY - rect.top) / scale;
+  let sx = Math.round(px - 32), sy = Math.round(py - 32);
+  sx = Math.max(0, Math.min(MONDE_W * 8 - 64, sx));
+  sy = Math.max(0, Math.min(MONDE_H * 8 - 64, sy));
+  loupeCtx.clearRect(0, 0, 256, 256);
+  loupeCtx.drawImage(mapCanvas, sx, sy, 64, 64, 0, 0, 256, 256);
+  let lx = e.clientX + 24, ly = e.clientY + 24;
+  if (lx + 260 > window.innerWidth) lx = e.clientX - 280;
+  if (ly + 260 > window.innerHeight) ly = e.clientY - 280;
+  loupe.style.left = lx + 'px';
+  loupe.style.top = ly + 'px';
+  loupe.style.display = 'block';
+});
+mapCanvas.addEventListener('mouseleave', () => { loupe.style.display = 'none'; });
+</script>
+
+</body>
+</html>

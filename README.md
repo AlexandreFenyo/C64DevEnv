@@ -91,8 +91,8 @@ Pour déboguer une instance lancée par `make debug PROG=xxx` ou par le portail 
 
 ## Bibliothèque libc64 et jeu (mygame)
 
-- `libc64/` : fonctions réutilisables en C et en assembleur (écran, sprites, manette, son, temps, hasard, interruptions, lignes raster, tileset du jeu), une par fichier. `#include "libc64.h"` suffit : un programme n'embarque que les fonctions qu'il appelle. Détails et liste : `libc64/README.md`.
-- `mygame/` : les versions du jeu, une par sous-répertoire : `mygame/demo` (`make run PROG=demo`, ou `F5` dans VS Code sur `mygame/demo/main.c`), `mygame/demo2` (bande de couleur au bord net).
+- `libc64/` : fonctions réutilisables en C et en assembleur (écran, sprites, manette, son, temps, hasard, interruptions, lignes raster, tileset du jeu, monde du jeu), une par fichier. `#include "libc64.h"` suffit : un programme n'embarque que les fonctions qu'il appelle. Détails et liste : `libc64/README.md`.
+- `mygame/` : les versions du jeu, une par sous-répertoire : `mygame/demo` (`make run PROG=demo`, ou `F5` dans VS Code sur `mygame/demo/main.c`), `mygame/demo2` (bande de couleur au bord net), `mygame/monde` (promenade dans le monde 400 x 150, flèches ou manette).
 
 ## Arborescence
 

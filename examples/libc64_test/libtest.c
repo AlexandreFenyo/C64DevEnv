@@ -3,6 +3,7 @@
    test_done = 1 et boucle infinie. */
 #include <c64.h>
 #include "libc64.h"
+#include "world.h"
 
 static const unsigned char pattern[63] = { 0xFF, 0x81, 0x42 };
 
@@ -14,6 +15,7 @@ unsigned char spr_after_hide;   /* $D015 après sprite_hide(3) */
 unsigned char hi_after_move;    /* $D010 après sprite_move(3, 300, 100) */
 unsigned char joy_idle;         /* joy2_read() sans manette : 0 attendu */
 unsigned int frames_waited;
+unsigned char world_tiles[4];   /* world_tile : (0,0), (399,149), (200,75), hors du monde */
 
 /* irq / raster */
 unsigned char cia_count;        /* handler CIA qui se réenregistre à chaque appel */
@@ -102,6 +104,10 @@ int main(void)
         wait_frame();
     }
     b_delta = count_b - b_delta;    /* compteur 8 bits : la différence reste juste */
+    world_tiles[0] = world_tile(0, 0);
+    world_tiles[1] = world_tile(WORLD_W - 1, WORLD_H - 1);
+    world_tiles[2] = world_tile(200, 75);     /* eau de la rivière */
+    world_tiles[3] = world_tile(WORLD_W, 0);
     test_done = 1;
     for (;;) {
     }

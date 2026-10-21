@@ -105,11 +105,19 @@ void __fastcall__ raster_unregister(irq_handler_t h);
    tools/mktileset.py). Fond vert clair ($D021), gris et blanc partagés
    ($D022/$D023), mode multicolore case par case : une case est multicolore
    si sa Color RAM vaut 8 + couleur (0-7). */
-#define TILESET_CHARSET 0x3800      /* banque VIC 0, hors de la ROM ($1000-$1FFF) */
-/* Copie les motifs en $3800 et règle le VIC-II. Renvoie 0, ou 0xFF si le
-   programme (code + données + BSS) déborde sur $3800 : rien n'est fait. */
+/* Mémoire vidéo en banque VIC 3 ($C000-$FFFF) : écran en $C000, second écran
+   réservé en $C400 (double tampon du défilement), jeu de caractères en
+   $C800. Les programmes sont liés avec __HIMEM__ = $C000 (Makefile) : le
+   programme, sa pile C et ses données s'arrêtent avant ; l'éditeur de liens
+   refuse un programme trop gros. Color RAM : toujours $D800. */
+#define TILESET_SCREEN  0xC000
+#define TILESET_SCREEN2 0xC400
+#define TILESET_CHARSET 0xC800
+/* Copie les motifs en $C800, passe le VIC-II en banque 3 (écran $C000) et
+   règle les couleurs. Renvoie 0, ou 0xFF si le programme déborde sur $C000
+   (impossible avec __HIMEM__ = $C000 : garde-fou). */
 unsigned char tileset_install(void);
-/* Rend le jeu de caractères de la ROM et coupe le multicolore. */
+/* Rend la banque 0, l'écran $0400, la ROM de caractères ; coupe le multicolore. */
 void tileset_done(void);
 /* Color RAM par défaut du tile (celle de sa palette ; 8 + couleur en MC). */
 unsigned char __fastcall__ tile_color(unsigned char code);
@@ -119,6 +127,17 @@ void __fastcall__ tile_put_color(unsigned char x, unsigned char y, unsigned char
                                  unsigned char color);
 /* Tout l'écran avec un tile (Color RAM par défaut). */
 void __fastcall__ tile_fill(unsigned char code);
+
+/* --- Monde du jeu (libc64/world) ----------------------------------------------
+   Carte de WORLD_W x WORLD_H tiles (constantes dans world.h), importée de la
+   carte HTML (libc64/world/world.txt) et compressée par tools/mkworld.py
+   (~27 Ko). Affichage dans l'écran du tileset (TILESET_SCREEN, $C000) :
+   appeler tileset_install() d'abord. */
+/* Fenêtre 40x25 dont le coin haut gauche est la case (x, y), ramenée dans
+   [0, WORLD_MAX_X] x [0, WORLD_MAX_Y]. Environ 3 images. [asm] */
+void __fastcall__ world_draw(unsigned int x, unsigned char y);
+/* Code de tile de la case (x, y) ; 0 hors du monde. [asm] */
+unsigned char __fastcall__ world_tile(unsigned int x, unsigned char y);
 
 /* --- Hasard (libc64/random) ---------------------------------------------- */
 /* Nombre pseudo-aléatoire 1-255 (registre à décalage, période 255). [asm] */

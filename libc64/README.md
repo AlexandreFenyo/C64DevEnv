@@ -4,7 +4,7 @@ Fonctions réutilisables par les programmes du dépôt (`mygame/`, `src/`, `exam
 
 ## Principe : on ne paie que ce qu'on utilise
 
-- **Un sous-répertoire par thème** : `screen/`, `sprite/`, `input/`, `time/`, `sound/`, `random/`, `irq/`, `raster/`, `tileset/`.
+- **Un sous-répertoire par thème** : `screen/`, `sprite/`, `input/`, `time/`, `sound/`, `random/`, `irq/`, `raster/`, `tileset/`, `world/`.
 - **Un fichier par fonction** : chaque fichier devient un module de l'archive `build/libc64.lib` (construite par `make`).
 - Chaque programme est lié avec cette archive. L'éditeur de liens `ld65` **n'y prend que les modules appelés** : une fonction inutilisée n'occupe aucun octet dans le `.prg`. Liste de ce qui a été incorporé : `build/<prog>.map`, rubrique « Modules list », lignes `libc64.lib(...)`.
 
@@ -47,16 +47,25 @@ Les fonctions asm suivent la convention `__fastcall__` de cc65 : dernier argumen
 | irq | `irq_register(h, sources)` / `irq_unregister(h)` / `irq_init()` / `irq_done()` | asm | répartiteur d'interruptions, table fixe de `IRQ_MAX_HANDLERS` handlers |
 | raster | `raster_register(line, h)` / `raster_unregister(h)` | asm | handler appelé à une ligne raster, table fixe de `RASTER_MAX_HANDLERS` |
 
-| tileset | `tileset_install()` / `tileset_done()` | C | jeu de caractères du jeu de conduite en `$3800` + couleurs du VIC-II |
+| tileset | `tileset_install()` / `tileset_done()` | C | jeu de caractères du jeu de conduite en `$C800`, écran en `$C000` (banque VIC 3) + couleurs du VIC-II |
 | tileset | `tile_put(x, y, code)` / `tile_put_color(x, y, code, color)` / `tile_fill(code)` / `tile_color(code)` | C | poser des tiles avec leur Color RAM par défaut ou imposée |
 
 ### Tileset du jeu (`tileset`)
 
 - **Source unique** : `libc64/tileset/tileset.txt`, la description fournie (configuration VIC-II, palette, palettes P01-P14, 182 tiles `$40`-`$FB`, assemblages, auto-tiling de l'eau). `tools/mktileset.py` en génère `tileset/tileset_data.s` (motifs + Color RAM par défaut), `include/tiles.h` et `include/tiles.inc` (`TILE_HERBE`, `TILE_LOGO_POMME_HG`…, couleurs `TC_VERT_CLAIR`…, `TILESET_BG/MC1/MC2`). Modifier un tile : éditer `tileset.txt`, puis `make` (régénération automatique). Les fichiers générés sont versionnés ; le test 6 vérifie qu'ils sont à jour.
-- `tileset_install()` copie les motifs en **`$3800`** (dernier emplacement de 2 Ko de la banque VIC 0, hors de la zone `$1000`-`$1FFF` où le VIC-II voit la ROM), met `$D021`=13, `$D022`=11, `$D023`=1, active le multicolore (`$D016` bit 4) et pointe `$D018` sur `$3800`. Elle refuse (renvoie `0xFF`) si le programme, BSS compris, déborde sur `$3800` (programme limité à environ 12 Ko ; pas de `malloc` qui monterait jusque-là).
+- **Mémoire vidéo en banque VIC 3** : écran en **`$C000`** (`TILESET_SCREEN`), second écran réservé en `$C400` (double tampon du futur défilement au pixel), motifs en **`$C800`** (`TILESET_CHARSET`). Le Makefile lie tous les programmes avec `__HIMEM__ = $C000` : programme, données et pile C tiennent dans `$0801`-`$BFFF` (≈ 45 Ko ; le runtime cc65 coupe la ROM BASIC), et l'éditeur de liens refuse un programme trop gros. `tileset_install()` copie les motifs, sélectionne la banque 3 (`$DD00`), pointe `$D018` sur l'écran et les motifs, met `$D021`=13, `$D022`=11, `$D023`=1, active le multicolore (`$D016` bit 4) et place la page écran du KERNAL (`$0288`) en `$C0`. `tile_put`, `tile_fill` écrivent dans cet écran ; les fonctions `screen_*` restent sur l'écran `$0400` du KERNAL. Sprites : leurs motifs doivent alors être dans la banque 3 (pointeurs en `$C3F8`), `sprite_load` ne le gère pas encore.
 - **Color RAM par défaut** d'un tile = couleur de sa palette : STD → couleur du bit 1 ; MC → 8 + couleur du couple `11` (le bit 3 rend la case multicolore). `tile_put_color` impose une autre valeur (convention `{tile, colorRam}` de la carte, ex. carrosserie d'une voiture : `8 + TC_BLEU`).
 - **Écarts de la description, signalés par le générateur** : la Color RAM ne fournit que les couleurs 0-7. P13 (`1=ROSE`, couleur 10) est donc irréalisable : les tiles `$E4`-`$E6` (LeCat, rangée du milieu) prennent la couleur réalisable la plus proche, **VIOLET (4)**. P06 (`11=GRIS`) l'est aussi, mais ses deux tiles (`$5A`, `$5E`) n'ont aucun pixel `11` : sans effet.
 - Vitrine : `examples/tileset_demo` (catalogue + assemblages).
+
+| world | `world_draw(x, y)` / `world_tile(x, y)` | asm | monde du jeu : vue 40x25 à la case (x, y), code d'une case |
+
+### Monde du jeu (`world`)
+
+- **Origine** : la carte de l'utilisateur, `libc64/world/carte_monde_c64.html` (copie de `C:\Alex\C64-FCB-Map2\carte_monde_c64.html`) : 10 x 6 écrans = **400 x 150 tiles**, générés par le script de la page (graine fixe). `tools/importworld.py` exécute ce script avec `node` (seul usage de node, à relancer quand la carte change) et écrit `world/world.txt` : une valeur de case = (code de tile, Color RAM imposée ou celle du tile), 232 valeurs, puis 150 lignes de 400 index.
+- **Compression** (`tools/mkworld.py`, automatique au `make`) : une case = un octet d'index ; chaque ligne codée en littéraux + jetons « répéter la case précédente N fois », coupée tous les 40 colonnes avec une table d'adresses des segments. 60 000 cases → **27 Ko** (23,7 Ko de lignes + 3,5 Ko de tables), vérifiés par un décodage complet à la génération. Lire n'importe quelle case ou ligne de la vue = partir du segment de 40 colonnes qui la contient (au plus 39 cases à sauter).
+- `world_draw(x, y)` dessine la vue 40 x 25 (coin haut gauche en (x, y), ramené dans le monde : `WORLD_MAX_X` = 360, `WORLD_MAX_Y` = 125) dans l'écran `$C000` et la Color RAM : environ 3 images. `world_tile(x, y)` rend le code d'une case (0 hors du monde), pour les collisions. Constantes dans `include/world.h` (`WORLD_W`, `WORLD_H`…).
+- Programme : `mygame/monde` (promenade, blocage aux bords). Pas encore de défilement au pixel : chaque pas redessine la vue.
 
 ### Interruptions (`irq`) et lignes raster (`raster`)
 

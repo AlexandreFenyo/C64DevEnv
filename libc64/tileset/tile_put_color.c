@@ -7,6 +7,6 @@ void __fastcall__ tile_put_color(unsigned char x, unsigned char y, unsigned char
 {
     unsigned int offset = y * 40 + x;
 
-    *((unsigned char *)0x0400 + offset) = code;
+    *((unsigned char *)TILESET_SCREEN + offset) = code;
     *((unsigned char *)0xD800 + offset) = color;
 }

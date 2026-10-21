@@ -53,7 +53,7 @@ int main(void)
 
     install_result = tileset_install();
     if (install_result != 0) {
-        VIC.bordercolor = COLOR_RED;        /* programme trop gros pour $3800 */
+        VIC.bordercolor = COLOR_RED;        /* programme trop gros pour $C000 */
         for (;;) {
         }
     }
@@ -99,7 +99,7 @@ int main(void)
     block(4, 17, 2, 3, voiture);
     for (i = 0; i < 6; ++i) {
         *((unsigned char *)0xD800 + (17 + i / 2) * 40 + 8 + i % 2) = 8 + TC_BLEU;
-        *((unsigned char *)0x0400 + (17 + i / 2) * 40 + 8 + i % 2) = voiture[i];
+        *((unsigned char *)TILESET_SCREEN + (17 + i / 2) * 40 + 8 + i % 2) = voiture[i];
     }
 
     block(12, 17, 4, 3, lac);

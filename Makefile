@@ -36,7 +36,7 @@ CC65_TARGET := c64
 CL65        ?= cl65
 CFLAGS      ?= -O
 ASFLAGS     ?=
-LDFLAGS     ?=
+LDFLAGS     ?= -Wl -D,__HIMEM__=0xC000   # $C000-$CFFF : écrans et jeu de caractères (libc64/tileset)
 DEBUGFLAGS  ?= -g            # symboles locaux dans les fichiers de labels
 
 # Programmes en répertoire : src/foo/, examples/bar/
@@ -99,6 +99,12 @@ $(foreach f,$(PROG_FILES),$(eval $(call PROG_RULE,$(basename $(notdir $(f))),$(f
 $(LIB_DIR)/tileset/tileset_data.s $(LIB_DIR)/include/tiles.h $(LIB_DIR)/include/tiles.inc &: $(LIB_DIR)/tileset/tileset.txt $(TOOLS)/mktileset.py
 	python3 $(TOOLS)/mktileset.py $(LIB_DIR)/tileset/tileset.txt $(LIB_DIR)/tileset/tileset_data.s \
 	    $(LIB_DIR)/include/tiles.h $(LIB_DIR)/include/tiles.inc
+
+# Monde : compressé depuis world.txt (lui-même importé de la carte HTML par
+# tools/importworld.py, à relancer à la main quand la carte change).
+$(LIB_DIR)/world/world_data.s $(LIB_DIR)/include/world.h $(LIB_DIR)/include/world_defs.inc &: $(LIB_DIR)/world/world.txt $(LIB_DIR)/tileset/tileset.txt $(TOOLS)/mkworld.py $(TOOLS)/mktileset.py
+	python3 $(TOOLS)/mkworld.py $(LIB_DIR)/world/world.txt $(LIB_DIR)/tileset/tileset.txt \
+	    $(LIB_DIR)/world/world_data.s $(LIB_DIR)/include/world.h $(LIB_DIR)/include/world_defs.inc
 
 # Un module par fichier de libc64 (même options que les programmes, -g compris :
 # le pas à pas dans VS Code et le portail entre dans les fonctions de la
