@@ -139,6 +139,30 @@ void __fastcall__ world_draw(unsigned int x, unsigned char y);
 /* Code de tile de la case (x, y) ; 0 hors du monde. [asm] */
 unsigned char __fastcall__ world_tile(unsigned int x, unsigned char y);
 
+/* Défilement fin (au pixel), double tampon (écrans $C000/$C400) : fenêtre
+   visible de 304 x 192 pixels (38 colonnes, 24 lignes). Position = coin haut
+   gauche visible, en pixels du monde. Le déplacement est appliqué à chaque
+   image par un handler raster (ligne 250, libc64/raster) ; le programme
+   prépare la vue suivante en appelant world_scroll_work() en boucle. [C + asm]
+   Vitesse de -7 à 7 ; sans attente jusqu'à 2 (mesuré). */
+#include "world.h"
+#define WORLD_SCROLL_MAX_PX (WORLD_W * 8u - 304)   /* largeur du monde - largeur visible */
+#define WORLD_SCROLL_MAX_PY (WORLD_H * 8u - 192)
+extern unsigned int world_px, world_py;      /* position courante */
+extern signed char world_scroll_dx, world_scroll_dy;   /* vitesse voulue (pixels/image) */
+extern unsigned int world_scroll_stalls;     /* images où la vue suivante n'était pas prête */
+extern unsigned int world_scroll_frames;     /* images traitées */
+extern unsigned char world_scroll_bumps;     /* images où la vue a buté sur un bord */
+extern unsigned char world_scroll_front;     /* écran affiché : 0 = $C000, 1 = $C400 */
+/* Affiche la vue en (px, py) (bornée, ~4 images) et démarre le handler. */
+void __fastcall__ world_scroll_init(unsigned int px, unsigned int py);
+/* Arrête le handler (la vue reste affichée). */
+void world_scroll_done(void);
+/* Prépare la vue suivante, une étape par appel (copie décalée ~23 000
+   cycles, nouvelle ligne ~3 500, nouvelle colonne ~9 000) ; 0 s'il n'y a rien
+   à faire. À appeler en boucle dans la boucle principale du programme. */
+unsigned char world_scroll_work(void);
+
 /* --- Hasard (libc64/random) ---------------------------------------------- */
 /* Nombre pseudo-aléatoire 1-255 (registre à décalage, période 255). [asm] */
 unsigned char rnd8(void);

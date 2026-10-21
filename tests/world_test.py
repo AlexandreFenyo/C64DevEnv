@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 """world_test.py - vérifie libc64/world avec mygame/monde (appelé par le test 6).
 
-- La vue affichée (écran $C000 + Color RAM) est exactement la fenêtre 40x25 de
-  world.txt à la position de la caméra (cam_x, cam_y), recalculée ici en Python
-  (codes de tile et Color RAM, mêmes règles que tools/mkworld.py) ;
-- touches flèches envoyées au clavier du C64 : la caméra avance d'une case par
-  touche et s'arrête aux bords du monde (bumps compte les chocs) ;
-- vérifié au départ, au bord droit, puis au coin haut gauche.
+Défilement fin (world_scroll) : la position (world_px, world_py) est pilotée
+par les globales de mygame/monde (auto_dx/auto_dy : déplacement imposé ;
+goto_req/goto_px/goto_py : saut). À l'arrêt, on lit d'un coup (émulateur
+arrêté) :
+- l'écran affiché ($C000 ou $C400 selon world_scroll_front, et $D018) et la
+  Color RAM : exactement la vue 40x25 de world.txt dont le coin est la case
+  (px >> 3, py >> 3), recalculée ici (mêmes règles que tools/mkworld.py ;
+  cases au-delà du monde : remplissage $4D, couleur 5) ;
+- le décalage fin : $D016 et $D011 bits 0-2 = 7 - (px & 7) / 7 - (py & 7),
+  bit 3 à 0 (38 colonnes, 24 lignes). Le bit 7 de $D011 relu est celui de
+  la ligne raster courante : non vérifié.
+Déplacements en ligne droite et en diagonale, à 1 et 2 pixels par image :
+aucune attente (vue suivante toujours prête à temps) ; blocage aux quatre
+bords (chocs comptés) ; vues autour des frontières de segments.
 VICE doit tourner avec build/monde.prg et le moniteur (run.sh --monitor).
 """
 import os
@@ -18,7 +26,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import dbg  # noqa: E402
 import mkworld  # noqa: E402
 
-RIGHT, LEFT, DOWN, UP = 0x1D, 0x9D, 0x11, 0x91        # PETSCII des flèches
+FILL_CODE, FILL_COLOR = 0x4D, 5
 
 
 def fail(msg):
@@ -26,149 +34,169 @@ def fail(msg):
     sys.exit(1)
 
 
-def expected_view(model, rows, cx, cy):
-    codes, colors = [], []
-    for y in range(cy, cy + 25):
-        for x in range(cx, cx + 40):
-            v = rows[y][x]
-            codes.append(model["codes"][v])
-            colors.append(model["colors"][v])
-    return bytes(codes), bytes(colors)
-
-
 class C64:
     def __init__(self):
         self.labels = dbg.Labels(os.path.join(ROOT, "build", "monde.labels"))
 
-    def mon(self):
-        return dbg.Monitor(6502, 10)
+    def addr(self, name):
+        a = self.labels.lookup(name)
+        if a is None:
+            fail("label %s absent de build/monde.labels" % name)
+        return a
 
-    def read(self, name, n):
-        m = self.mon()
+    def snapshot(self, names):
+        """{nom: octets} des variables (nom, taille) et de la vue, émulateur arrêté."""
+        m = dbg.Monitor(6502, 10)
         try:
-            st = m.status()["stopped"]
-            data = m.mem_get(self.labels.lookup(name), self.labels.lookup(name) + n - 1)
-            return data
-        finally:
-            if not st:
-                m.exit_monitor()
-            m.close()
-
-    def cam(self):
-        d = self.read("_cam_x", 3)
-        return d[0] | (d[1] << 8), d[2]
-
-    def screen(self):
-        m = self.mon()
-        try:
-            codes = m.mem_get(0xC000, 0xC000 + 999)
-            colors = bytes(b & 0x0F for b in m.mem_get(0xD800, 0xD800 + 999, m.bank_id("io")))
+            out = {n: m.mem_get(self.addr(n), self.addr(n) + k - 1) for n, k in names}
+            io = m.bank_id("io")
+            front = m.mem_get(self.addr("_world_scroll_front"), self.addr("_world_scroll_front"))[0]
+            base = 0xC400 if front else 0xC000
+            out["codes"] = m.mem_get(base, base + 999)
+            out["colors"] = bytes(b & 0x0F for b in m.mem_get(0xD800, 0xD800 + 999, io))
+            out["vic"] = m.mem_get(0xD011, 0xD018, io)
+            out["front"] = front
         finally:
             m.exit_monitor()
             m.close()
-        return codes, colors
+        return out
 
     def poke(self, name, data):
-        m = self.mon()
+        m = dbg.Monitor(6502, 10)
         try:
-            m.mem_set(self.labels.lookup(name), bytes(data))
+            m.mem_set(self.addr(name), bytes(data))
         finally:
             m.exit_monitor()
             m.close()
 
-    def keys(self, key, count):
-        """count appuis, par paquets de 8 (tampon clavier du KERNAL : 10), en
-        attendant que chaque paquet soit consommé et les vues redessinées."""
-        while count > 0:
-            n = min(8, count)
-            before = self.read("_redraws", 2)
-            m = self.mon()
-            try:
-                m.keyboard_feed(bytes([key]) * n)
-            finally:
-                m.exit_monitor()
-                m.close()
-            deadline = time.time() + 20
-            while time.time() < deadline:
-                time.sleep(0.05)
-                if self.read("_redraws", 2) != before and self._kbuf_empty():
-                    break
+    def word(self, name):
+        d = self.snapshot([(name, 2)])[name]
+        return d[0] | d[1] << 8
+
+    def frames(self):
+        return self.word("_world_scroll_frames")
+
+    def wait_frames(self, n):
+        f0 = self.frames()
+        deadline = time.time() + 20
+        while (self.frames() - f0) & 0xFFFF < n:
+            if time.time() > deadline:
+                fail("le handler du défilement ne tourne pas")
+            time.sleep(0.05)
+
+    def goto(self, px, py):
+        self.poke("_goto_px", [px & 0xFF, px >> 8, py & 0xFF, py >> 8])
+        self.poke("_goto_req", [1])
+        deadline = time.time() + 10
+        while self.snapshot([("_goto_req", 1)])["_goto_req"][0]:
+            if time.time() > deadline:
+                fail("goto non pris en compte")
+            time.sleep(0.05)
+        self.wait_frames(3)
+
+    def move(self, dx, dy, frames):
+        """Déplacement imposé pendant `frames` images, puis arrêt. Renvoie le
+        nombre d'attentes et de chocs pendant le déplacement."""
+        s0 = self.snapshot([("_world_scroll_stalls", 2), ("_world_scroll_bumps", 1)])
+        self.poke("_auto_dx", [dx & 0xFF, dy & 0xFF])
+        self.wait_frames(frames)
+        self.poke("_auto_dx", [0, 0])
+        self.wait_frames(3)
+        s1 = self.snapshot([("_world_scroll_stalls", 2), ("_world_scroll_bumps", 1)])
+        w = lambda d: d[0] | d[1] << 8  # noqa: E731
+        return ((w(s1["_world_scroll_stalls"]) - w(s0["_world_scroll_stalls"])) & 0xFFFF,
+                (s1["_world_scroll_bumps"][0] - s0["_world_scroll_bumps"][0]) & 0xFF)
+
+
+def expected_view(model, rows, tx, ty):
+    codes, colors = [], []
+    for y in range(ty, ty + 25):
+        for x in range(tx, tx + 40):
+            if x < model["w"] and y < model["h"]:
+                v = rows[y][x]
+                codes.append(model["codes"][v])
+                colors.append(model["colors"][v])
             else:
-                fail("touches non consommées")
-            time.sleep(0.2)
-            count -= n
-
-    def _kbuf_empty(self):
-        m = self.mon()
-        try:
-            return m.mem_get(0xC6, 0xC6)[0] == 0
-        finally:
-            m.exit_monitor()
-            m.close()
+                codes.append(FILL_CODE)
+                colors.append(FILL_COLOR)
+    return bytes(codes), bytes(colors)
 
 
 def check_view(c64, model, rows, what):
-    time.sleep(0.3)
-    cx, cy = c64.cam()
-    codes, colors = c64.screen()
-    ecodes, ecolors = expected_view(model, rows, cx, cy)
-    if codes != ecodes:
-        i = next(i for i in range(1000) if codes[i] != ecodes[i])
-        fail("%s : écran différent du monde en (%d, %d), case %d,%d : $%02X au lieu de $%02X"
-             % (what, cx, cy, i % 40, i // 40, codes[i], ecodes[i]))
-    if colors != ecolors:
-        i = next(i for i in range(1000) if colors[i] != ecolors[i])
-        fail("%s : Color RAM différente en (%d, %d), case %d,%d : %d au lieu de %d"
-             % (what, cx, cy, i % 40, i // 40, colors[i], ecolors[i]))
-    print("ok : %s, vue (%d, %d) identique au monde (codes et Color RAM)" % (what, cx, cy))
-    return cx, cy
+    s = c64.snapshot([("_world_px", 4)])
+    p = s["_world_px"]
+    px, py = p[0] | p[1] << 8, p[2] | p[3] << 8
+    tx, ty = px >> 3, py >> 3
+    ecodes, ecolors = expected_view(model, rows, tx, ty)
+    if s["codes"] != ecodes:
+        i = next(i for i in range(1000) if s["codes"][i] != ecodes[i])
+        fail("%s : écran différent du monde en (%d, %d) px, case %d,%d : $%02X au lieu de $%02X"
+             % (what, px, py, i % 40, i // 40, s["codes"][i], ecodes[i]))
+    if s["colors"] != ecolors:
+        i = next(i for i in range(1000) if s["colors"][i] != ecolors[i])
+        fail("%s : Color RAM différente en (%d, %d) px, case %d,%d : %d au lieu de %d"
+             % (what, px, py, i % 40, i // 40, s["colors"][i], ecolors[i]))
+    d011, d016, d018 = s["vic"][0], s["vic"][5], s["vic"][7]
+    if (d016 & 0x0F) != 7 - (px & 7) or (d011 & 0x0F) != 7 - (py & 7):
+        fail("%s : décalage fin $D016=$%02X $D011=$%02X pour (%d, %d)" % (what, d016, d011, px, py))
+    if d018 & 0xFE != (0x12 if s["front"] else 0x02):
+        fail("%s : $D018=$%02X mais écran affiché %d" % (what, d018, s["front"]))
+    print("ok : %s, (%d, %d) px : vue identique au monde (codes, Color RAM, décalage fin)" % (what, px, py))
+    return px, py
 
 
 def main():
     model = mkworld.build(os.path.join(ROOT, "libc64", "world", "world.txt"),
                           os.path.join(ROOT, "libc64", "tileset", "tileset.txt"))
     _, _, _, rows = mkworld.read_world(os.path.join(ROOT, "libc64", "world", "world.txt"))
+    max_px, max_py = model["w"] * 8 - 304, model["h"] * 8 - 192
     c64 = C64()
-    deadline = time.time() + 20
-    while c64.read("_redraws", 2) == b"\0\0":
-        if time.time() > deadline:
-            fail("monde : aucune vue dessinée")
-        time.sleep(0.1)
-    cx, cy = check_view(c64, model, rows, "départ")
-    if (cx, cy) != ((model["w"] - 40) // 2, (model["h"] - 25) // 2):
-        fail("départ attendu au centre du monde, caméra en (%d, %d)" % (cx, cy))
+    c64.wait_frames(5)
+    px, py = check_view(c64, model, rows, "départ")
+    if (px, py) != (max_px // 2, max_py // 2):
+        fail("départ attendu au centre du monde, position (%d, %d)" % (px, py))
 
-    # Bord droit : WORLD_MAX_X - cx pas + 4 de trop.
-    c64.keys(RIGHT, model["w"] - 40 - cx + 4)
-    cx2, _ = check_view(c64, model, rows, "bord droit")
-    bumps = c64.read("_bumps", 1)[0]
-    if cx2 != model["w"] - 40 or bumps < 4:
-        fail("bord droit : caméra x=%d (attendu %d), chocs %d (4 attendus)" % (cx2, model["w"] - 40, bumps))
-    print("ok : bloqué au bord droit (x=%d, %d chocs)" % (cx2, bumps))
+    # Lignes droites et diagonales, 1 et 2 pixels par image, en partant sur
+    # chaque axe à 8 pixels de la case suivante (le premier franchissement
+    # laisse le temps de préparer la vue ; un départ à 1 pixel d'une case
+    # attend 2 ou 3 images) : aucune attente ensuite.
+    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, 1), (1, -1), (-1, -1),
+                   (2, 0), (-2, 0), (0, 2), (0, -2), (2, 2), (-2, -2), (2, -1)):
+        x0 = (max_px // 2) // 8 * 8 + (7 if dx < 0 else 0)
+        y0 = (max_py // 2) // 8 * 8 + (7 if dy < 0 else 0)
+        c64.goto(x0, y0)
+        stalls, bumps = c64.move(dx, dy, 100)
+        if stalls or bumps:
+            fail("déplacement (%+d, %+d) : %d attente(s), %d choc(s)" % (dx, dy, stalls, bumps))
+        x, y = check_view(c64, model, rows, "déplacement (%+d, %+d), sans attente" % (dx, dy))
+        # Au moins 100 images de déplacement (plus en --warp : le test réagit
+        # moins vite que l'émulateur), dans le bon sens, axe immobile inchangé.
+        mx, my = x - x0, y - y0
+        for m, d in ((mx, dx), (my, dy)):
+            if (d == 0 and m != 0) or (d != 0 and (m * d < 0 or abs(m) < 100 * abs(d) - 8)):
+                fail("déplacement (%+d, %+d) : déplacé de (%+d, %+d) pixels" % (dx, dy, mx, my))
 
-    # Coin haut gauche : on rapproche la caméra puis 3 pas de trop dans chaque sens.
-    c64.poke("_cam_x", [2, 0, 2])
-    c64.keys(LEFT, 5)
-    c64.keys(UP, 5)
-    cx3, cy3 = check_view(c64, model, rows, "coin haut gauche")
-    if (cx3, cy3) != (0, 0) or c64.read("_bumps", 1)[0] < bumps + 6:
-        fail("coin haut gauche : caméra (%d, %d), chocs %d" % (cx3, cy3, c64.read("_bumps", 1)[0]))
-    print("ok : bloqué en (0, 0)")
+    # Bords : on s'approche puis on pousse.
+    for what, start, d, target in (("bord droit", (max_px - 30, 300), (2, 0), lambda x, y: x == max_px),
+                                   ("bord bas", (500, max_py - 30), (0, 2), lambda x, y: y == max_py),
+                                   ("coin haut gauche", (20, 20), (-2, -2), lambda x, y: (x, y) == (0, 0)),
+                                   ("coin bas droit", (max_px - 9, max_py - 9), (1, 1),
+                                    lambda x, y: (x, y) == (max_px, max_py))):
+        c64.goto(*start)
+        _, bumps = c64.move(d[0], d[1], 50)
+        x, y = check_view(c64, model, rows, what)
+        if not target(x, y) or bumps < 5:
+            fail("%s : position (%d, %d), %d choc(s)" % (what, x, y, bumps))
+        print("ok : bloqué au %s (%d chocs)" % (what, bumps))
 
-    # Bas : on rapproche puis on dépasse.
-    c64.poke("_cam_y", [model["h"] - 25 - 2])
-    c64.keys(DOWN, 4)
-    _, cy4 = check_view(c64, model, rows, "bord bas")
-    if cy4 != model["h"] - 25:
-        fail("bord bas : y=%d (attendu %d)" % (cy4, model["h"] - 25))
-    print("ok : bloqué au bord bas (y=%d)" % cy4)
-
-    # Balayage : colonnes autour des frontières de segments (40 cases) et
-    # lignes variées ; chaque vue est demandée par un pas à droite.
-    for x, y in ((38, 7), (39, 33), (78, 100), (119, 1), (158, 124), (239, 50), (318, 77), (358, 12)):
-        c64.poke("_cam_x", [x & 0xFF, x >> 8, y])
-        c64.keys(RIGHT, 1)
-        check_view(c64, model, rows, "balayage")
+    # Vues autour des frontières de segments (40 colonnes) : nouvelles colonnes
+    # à droite et à gauche, nouvelles lignes en haut et en bas.
+    for x, y, dx, dy in ((38 * 8, 56, 1, 0), (41 * 8, 300, -1, 0), (78 * 8 + 3, 800, 0, 1), (119 * 8, 9, 1, 1),
+                         (158 * 8 + 7, 990, -1, -1), (239 * 8, 400, 2, 0), (318 * 8 + 1, 616, -2, 1),
+                         (358 * 8, 100, 1, -1)):
+        c64.goto(x, y)
+        c64.move(dx, dy, 20)
+        check_view(c64, model, rows, "frontières de segments")
     print("monde OK")
 
 

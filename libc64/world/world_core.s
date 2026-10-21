@@ -10,7 +10,7 @@
 
         .include "world_defs.inc"
 
-        .export world_seek, world_next, world_x, world_y
+        .export world_seek, world_seek_segment, world_next, world_x, world_y
         .import world_seglo_lo, world_seglo_hi, world_seghi_lo, world_seghi_hi
         .importzp ptr1, ptr4
 
@@ -24,7 +24,9 @@ skip:       .res 1
 
         .segment "CODE"
 
-.proc world_seek
+; world_seek_segment : ptr1 = début du segment contenant (world_x, world_y),
+; A = nombre de cases à sauter dans ce segment pour atteindre world_x.
+.proc world_seek_segment
         ; segment k = world_x / WORLD_SEG, skip = reste (soustractions : k <= 9)
         lda world_x
         ldx world_x+1
@@ -56,9 +58,15 @@ done:   sta skip
         sta ptr4+1
         lda (ptr4),y
         sta ptr1+1
-        lda #0
-        sta rep
-        ldy skip                ; on saute les cases avant world_x
+        lda skip
+        rts
+.endproc
+
+.proc world_seek
+        jsr world_seek_segment
+        ldy #0
+        sty rep
+        tay                     ; on saute les cases avant world_x
         beq out
 skipl:  jsr world_next
         dey

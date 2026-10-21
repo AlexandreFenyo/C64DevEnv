@@ -1,62 +1,74 @@
-/* mygame/monde - promenade dans le monde du jeu (libc64/world) : la vue de
-   40x25 tiles se déplace d'une case à la fois, à la manette (port 2) ou au
-   clavier (flèches, ou W A S D), et s'arrête sur les bords du monde (la
-   bordure clignote en rouge quand on bute). Défilement par case (pas encore
-   au pixel) : chaque pas redessine la vue (~3 images). */
+/* mygame/monde - promenade dans le monde du jeu (libc64/world), avec
+   défilement fin au pixel (world_scroll_*) : manette (port 2) ou clavier
+   (flèches, ou W A S D, maintenues), 1 pixel par image ; bouton de tir ou
+   barre d'espace : 2 pixels par image. La vue s'arrête aux bords du monde (la
+   bordure clignote en rouge quand on bute).
+   Le déplacement est appliqué à chaque image par le handler raster de
+   world_scroll ; la boucle principale lit les commandes et prépare la vue
+   suivante (world_scroll_work). */
 #include <c64.h>
-#include <cbm.h>
 #include "libc64.h"
 #include "tiles.h"
 #include "world.h"
 
-#define START_X ((WORLD_W - WORLD_VIEW_W) / 2)    /* départ au centre du monde */
-#define START_Y ((WORLD_H - WORLD_VIEW_H) / 2)
-#define BUMP_FRAMES 6                              /* durée du clignotement sur un bord */
+#define START_PX (WORLD_SCROLL_MAX_PX / 2)    /* départ au centre du monde */
+#define START_PY (WORLD_SCROLL_MAX_PY / 2)
+#define BUMP_FRAMES 6                          /* durée du clignotement sur un bord */
+
+/* Matrice du clavier lue par le KERNAL : touche enfoncée ($CB, 64 = aucune)
+   et touches de modification ($028D, bit 0 = SHIFT). */
+#define KEY_NOW   (*(unsigned char *)0x00CB)
+#define KEY_SHIFT (*(unsigned char *)0x028D & 1)
+#define K_CRSR_LR 2                            /* droite ; avec SHIFT : gauche */
+#define K_CRSR_UD 7                            /* bas ; avec SHIFT : haut */
+#define K_W 9
+#define K_A 10
+#define K_S 13
+#define K_D 18
+#define K_SPACE 60
 
 /* Globales : lues par le débogueur et par le test 6. */
-unsigned int cam_x = START_X;       /* case du coin haut gauche de la vue */
-unsigned char cam_y = START_Y;
-unsigned int redraws;               /* nombre de vues dessinées */
-unsigned char bumps;                /* nombre de fois où l'on a buté sur un bord */
+signed char auto_dx, auto_dy;       /* déplacement imposé (tests, démonstration) */
+unsigned char goto_req;             /* 1 : aller en (goto_px, goto_py) */
+unsigned int goto_px, goto_py;
 
 int main(void)
 {
-    unsigned char joy, key, bump = 0;
+    unsigned char joy, key, shift, speed, bumps_seen = 0;
+    unsigned int bump_until = 0;
     signed char dx, dy;
 
     tileset_install();
     VIC.bordercolor = COLOR_BLACK;
-    world_draw(cam_x, cam_y);
-    ++redraws;
+    world_scroll_init(START_PX, START_PY);
 
     for (;;) {
-        wait_frame();
-        if (bump && --bump == 0) {
+        if (goto_req) {
+            goto_req = 0;
+            world_scroll_init(goto_px, goto_py);
+        }
+        joy = joy2_read();
+        key = KEY_NOW;
+        shift = KEY_SHIFT;
+        dx = auto_dx;
+        dy = auto_dy;
+        if ((joy & J_LEFT) || key == K_A || (key == K_CRSR_LR && shift)) dx = -1;
+        if ((joy & J_RIGHT) || key == K_D || (key == K_CRSR_LR && !shift)) dx = 1;
+        if ((joy & J_UP) || key == K_W || (key == K_CRSR_UD && shift)) dy = -1;
+        if ((joy & J_DOWN) || key == K_S || (key == K_CRSR_UD && !shift)) dy = 1;
+        speed = ((joy & J_FIRE) || key == K_SPACE) ? 2 : 1;
+        world_scroll_dx = dx * speed;
+        world_scroll_dy = dy * speed;
+
+        if (world_scroll_bumps != bumps_seen) {     /* bord : clignotement */
+            bumps_seen = world_scroll_bumps;
+            bump_until = world_scroll_frames + BUMP_FRAMES;
+            VIC.bordercolor = COLOR_RED;
+        } else if (bump_until && world_scroll_frames >= bump_until) {
+            bump_until = 0;
             VIC.bordercolor = COLOR_BLACK;
         }
-        dx = dy = 0;
-        joy = joy2_read();
-        key = cbm_k_getin();                        /* 0 si aucune touche */
-        if ((joy & J_LEFT) || key == CH_CURS_LEFT || key == 'a') dx = -1;
-        if ((joy & J_RIGHT) || key == CH_CURS_RIGHT || key == 'd') dx = 1;
-        if ((joy & J_UP) || key == CH_CURS_UP || key == 'w') dy = -1;
-        if ((joy & J_DOWN) || key == CH_CURS_DOWN || key == 's') dy = 1;
-        if (dx == 0 && dy == 0) {
-            continue;
-        }
-        /* Bords : on n'avance que si la vue reste dans le monde. */
-        if ((dx < 0 && cam_x == 0) || (dx > 0 && cam_x == WORLD_MAX_X)
-            || (dy < 0 && cam_y == 0) || (dy > 0 && cam_y == WORLD_MAX_Y)) {
-            ++bumps;
-            bump = BUMP_FRAMES;
-            VIC.bordercolor = COLOR_RED;
-        }
-        if (dx < 0 && cam_x > 0) --cam_x;
-        if (dx > 0 && cam_x < WORLD_MAX_X) ++cam_x;
-        if (dy < 0 && cam_y > 0) --cam_y;
-        if (dy > 0 && cam_y < WORLD_MAX_Y) ++cam_y;
-        world_draw(cam_x, cam_y);
-        ++redraws;
+        world_scroll_work();
     }
     return 0;
 }
