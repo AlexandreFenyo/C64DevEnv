@@ -44,8 +44,7 @@ target_hi:   .res 1
 hooked:      .res 1
 in_dispatch: .res 1
 dirty:       .res 1             ; table modifiée par un handler
-lim_lo:      .res 1
-lim_hi:      .res 1
+cur_hi:      .res 1
 call_jmp:    .res 3             ; JMP absolu vers le handler (pas de JMP indirect : bug $xxFF)
 
         .segment "CODE"
@@ -221,6 +220,8 @@ off:    lda VIC_IRQMASK
 .endproc
 
 ; Handler IRQ_SRC_VIC (registres de page zéro déjà sauvegardés par irq).
+; Chemin le plus court possible entre deux handlers (lignes proches) : un seul
+; calcul de l'écart à la ligne voulue, puis appel, attente ou nouvelle IRQ.
 .proc dispatch
         lda _irq_vic_flags
         and #$01                ; interruption raster ?
@@ -230,27 +231,41 @@ go:     lda #1
         sta in_dispatch
         lda pos
         cmp count
-        bcc serve
+        bcc load
         lda #0                  ; table raccourcie entre-temps
         sta pos
         lda count
-        bne :+
+        bne load
         jmp off
-:       jsr set_target
 
-serve:  ; Ligne déjà atteinte ou dépassée : pas d'attente.
-        lda VIC_RASTER
-        tax
+load:   ldx pos                 ; target = ligne de l'entrée pos
+        lda l_lo,x
+        sta target_lo
+        lda l_hi,x
+        sta target_hi
+        ; écart = target - ligne courante
         lda VIC_CTRL1
-        rol                     ; bit 8 de la ligne -> retenue
+        asl                     ; bit 8 de la ligne -> retenue
         lda #0
         rol
-        tay                     ; Y:X = ligne courante
-        cpx target_lo
-        tya
-        sbc target_hi
-        bcs call                ; courante >= target
-        ; Attente de la ligne exacte : d'abord le bit 8, puis l'octet bas.
+        sta cur_hi
+        lda target_lo
+        sec
+        sbc VIC_RASTER
+        tax
+        lda target_hi
+        sbc cur_hi
+        bmi call                ; déjà dépassée : tout de suite
+        beq near
+far:    jmp later               ; 256 lignes ou plus, ou assez loin : IRQ
+near:   cpx #0
+        beq call                ; atteinte
+        cpx #RASTER_LEAD+2
+        bcs far                 ; assez loin pour une nouvelle IRQ
+        ; Attente de la ligne exacte (bit 8 d'abord s'il doit changer).
+        lda target_hi
+        cmp cur_hi
+        beq lo
         lda target_hi
         beq hb0
 hb1:    bit VIC_CTRL1
@@ -277,11 +292,11 @@ call:   ; Tous les handlers de cette ligne (consécutifs : table triée).
         bcs wrap
         lda l_lo,x              ; même ligne ?
         cmp target_lo
-        bne next
+        bne toload
         lda l_hi,x
         cmp target_hi
         beq call
-        bne next
+toload: jmp load
 
 resync: ; Table modifiée par le handler : première entrée de ligne > target.
         lda #0
@@ -299,30 +314,8 @@ rs:     cpx count
 rsend:  stx pos
         cpx count
         bcs wrap
+        jmp load
 
-next:   ; Entrée suivante (pos) : trop proche pour une nouvelle IRQ ?
-        ldx pos
-        lda l_lo,x
-        sta target_lo
-        sec
-        sbc #RASTER_LEAD+1
-        sta lim_lo
-        lda l_hi,x
-        sta target_hi
-        sbc #0
-        sta lim_hi
-        lda VIC_RASTER
-        tax
-        lda VIC_CTRL1
-        rol
-        lda #0
-        rol
-        tay                     ; Y:X = ligne courante
-        cpx lim_lo
-        tya
-        sbc lim_hi
-        bcc later               ; courante < limite : une IRQ suffit
-        jmp serve
 later:  jsr set_target
         jmp done
 wrap:   lda #0                  ; image suivante : première ligne de la table

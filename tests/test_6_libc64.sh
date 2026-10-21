@@ -78,25 +78,26 @@ $D poke _ship_x 0x2c 0x01 >/dev/null
 sleep 0.3
 [ "$($D mem '$d000' 1 --bank io | cut -c7-8)$($D mem '$d010' 1 --bank io | cut -c7-8)" = 2c01 ] || fail "demo : x=300 non appliqué"
 echo "ok : demo (titre, sprite, x au-delà de 255)"
-# Bande de 3 lignes : capture de l'écran, colonne x=100 (capture : ligne raster - 15).
+# Bande de 3 lignes : capture de l'écran (rang de capture = ligne raster - 15).
 $D capture build/test_band.png >/dev/null || fail "capture"
-band=$(python3 - <<'PY'
-import struct, zlib
-d = open("build/test_band.png", "rb").read()
-pos, idat, w = 8, b"", 0
-while pos < len(d):
-    n = struct.unpack(">I", d[pos:pos + 4])[0]
-    t, body = d[pos + 4:pos + 8], d[pos + 8:pos + 8 + n]
-    if t == b"IHDR":
-        w = struct.unpack(">I", body[:4])[0]
-    elif t == b"IDAT":
-        idat += body
-    pos += 12 + n
-raw = zlib.decompress(idat)
-rows = [y for y in range(len(raw) // (w + 1)) if raw[y * (w + 1) + 1 + 100] == 6]
-print(len(rows), rows[0] + 15 if rows else -1)
-PY
-)
-[ "$band" = "3 141" ] || fail "demo : bande attendue de 3 lignes à partir de la ligne 141 (relevé : $band)"
-echo "ok : demo, bande bleue de 3 lignes raster (141-143, colonne x=100)"
+band=$(python3 tests/png_band.py build/test_band.png)
+case "$band" in *"n=3") ;; *) fail "demo : bande de 3 lignes attendue (relevé : $band)" ;; esac
+echo "ok : demo, bande bleue de 3 lignes raster ($band)"
+tools/stop.sh --quiet
+
+# demo2 : début de bande retardé par des NOP jusqu'au bord de l'écran : bord
+# haut rectiligne sur toute la largeur, à chaque image (gigue de quelques
+# cycles) ; bord bas non retardé (marche attendue au moins une fois).
+tools/run.sh --headless --monitor build/demo2.prg >/dev/null || fail "run.sh demo2"
+sleep 0.5
+steps=0
+for k in $(seq 1 10); do
+    $D capture build/test_band.png >/dev/null || fail "capture demo2"
+    band=$(python3 tests/png_band.py build/test_band.png)
+    case "$band" in "haut=126 "*) ;; *) fail "demo2 : bord haut de la bande non rectiligne (image $k : $band)" ;; esac
+    case "$band" in *"bas=128 "*) ;; *) steps=$((steps + 1)) ;; esac
+    sleep 0.07
+done
+[ "$steps" -gt 0 ] || fail "demo2 : le bord bas devrait garder sa marche (fin de bande non retardée)"
+echo "ok : demo2, bord haut rectiligne sur 10 images, bord bas avec marche ($steps/10)"
 echo "libc64 OK"
