@@ -4,5 +4,6 @@
   "files.associations": {
     "*.s": "ca65",
     "*.inc": "ca65"
-  }
+  },
+  "makefile.configureOnOpen": false
 }

@@ -98,6 +98,7 @@ MAKE_TARGETS = {
         "portal": "démarre le portail lui-même",
         "portal-stop": "arrête le portail lui-même",
         "vscode": "installe l'extension VS Code : une fois, depuis un terminal (make vscode)",
+        "code": "ouvre VS Code sur le poste de l'utilisateur : depuis un terminal (make code)",
     },
 }
 

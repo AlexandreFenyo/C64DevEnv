@@ -13,7 +13,8 @@
 #   make list       liste les programmes détectés
 #   make portal     démarre le portail web (http://localhost:8064)
 #   make portal-stop    arrête le portail
-#   make vscode     installe l'extension VS Code (débogage, tools/vscode/)
+#   make vscode     installe l'extension VS Code (débogage, tools/vscode/), profil C64 compris
+#   make code       ouvre le dépôt dans VS Code (profil C64, connecté à WSL)
 #
 # Le portail (tools/portal.py) déclare les cibles qu'il utilise : toute cible
 # .PHONY ajoutée ou supprimée doit y être reportée (make test le vérifie).
@@ -40,7 +41,7 @@ PROGS      := $(sort $(notdir $(PROG_DIRS)) $(basename $(notdir $(PROG_FILES))))
 PRGS       := $(addprefix $(BUILD)/,$(addsuffix .prg,$(PROGS)))
 LABELS     := $(addprefix $(BUILD)/,$(addsuffix .labels,$(PROGS)))
 
-.PHONY: all clean run debug test list install portal portal-stop vscode
+.PHONY: all clean run debug test list install portal portal-stop vscode code
 .DELETE_ON_ERROR:
 
 all: $(PRGS) $(LABELS)
@@ -110,3 +111,6 @@ portal-stop:
 
 vscode:
 	$(TOOLS)/vscode-install.sh
+
+code:
+	$(TOOLS)/vscode-open.sh

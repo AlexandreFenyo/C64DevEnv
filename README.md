@@ -78,7 +78,7 @@ Les labels de `build/<prog>.labels` sont chargés dans VICE et utilisables par n
 
 ## Déboguer dans VS Code (asm et C)
 
-Une fois : `make vscode` (installe l'extension du dépôt dans VS Code côté WSL), puis ouvrez le dossier dans VS Code depuis Ubuntu (`cd ~/C64DevEnv && code .`) ; si VS Code était déjà ouvert : `Ctrl+Shift+P` → « Developer: Reload Window ».
+Une fois : `make vscode` (installe l'extension du dépôt dans VS Code côté WSL, y compris dans votre profil VS Code `C64`). Ensuite, pour travailler : **`make code`** (ou `code --profile C64 ~/C64DevEnv`) ouvre VS Code sous Windows, connecté à WSL (« WSL: Ubuntu-NEW » en bas à gauche), dans le profil `C64` qui regroupe les extensions de développement C64. Si VS Code était déjà ouvert : `Ctrl+Shift+P` → « Developer: Reload Window ». À la première ouverture, acceptez de faire confiance au dossier (« Trust »), sinon `F5` et les tâches sont bloqués. La complétion C connaît les en-têtes cc65 (`.vscode/c_cpp_properties.json`).
 
 1. Ouvrez un `.s` ou un `.c` de `src/` ou `examples/` (ex. `examples/squares_c/squares.c`).
 2. `F9` (ou clic dans la marge) pose un point d'arrêt.
