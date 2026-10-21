@@ -89,6 +89,19 @@ PRG="$(cd "$(dirname "$PRG")" && pwd)/$(basename "$PRG")"
 [ -n "$SCREENSHOT" ] && [ -z "$CYCLES" ] && die "--screenshot nécessite --cycles N"
 command -v "$X64SC" >/dev/null || die "x64sc introuvable : lancez tools/install.sh"
 
+# Mode visible : WSLg doit répondre. Sur ce poste, son serveur d'affichage
+# peut redémarrer en boucle (toutes les ~105 s) : x64sc échoue alors avec un
+# obscur « cannot open display ». On vérifie avant de toucher à l'instance
+# en cours, et on explique.
+if [ "$MODE" = show ]; then
+    [ -n "${DISPLAY:-}" ] || die "DISPLAY non défini : WSLg inactif ? Utilisez le mode invisible (--headless)."
+    if command -v xdpyinfo >/dev/null && ! timeout 3 xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
+        die "l'affichage WSLg ($DISPLAY) ne répond pas : fenêtre VICE impossible.
+  Utilisez le mode invisible (--headless ; portail : Mode « Invisible » + Moniteur, l'image s'affiche dans le portail).
+  Diagnostic : tools/install.sh --no-apt (section WSLg). Remède : wsl --shutdown dans PowerShell."
+    fi
+fi
+
 mkdir -p "$BUILD"
 NAME="$(basename "${PRG%.prg}")"
 LABELS="${PRG%.prg}.labels"
@@ -146,7 +159,6 @@ case "$MODE" in
         CMD=(env -u WAYLAND_DISPLAY GDK_BACKEND=x11 xvfb-run -a "$X64SC" "${ARGS[@]}")
         ;;
     show)
-        [ -n "${DISPLAY:-}" ] || die "DISPLAY non défini : WSLg inactif ? (utilisez --headless)"
         CMD=(env -u WAYLAND_DISPLAY GDK_BACKEND=x11 "$X64SC" "${ARGS[@]}")
         ;;
 esac

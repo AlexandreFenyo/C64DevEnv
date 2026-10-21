@@ -138,7 +138,7 @@ Couleurs : 0 noir, 1 blanc, 2 rouge, 3 cyan, 4 violet, 5 vert, 6 bleu, 7 jaune, 
 
 ## Limites connues
 
-- `--show` exige un WSLg fonctionnel ; `install.sh` le diagnostique (si weston redémarre en boucle, `wsl --shutdown` côté Windows). Le headless ne dépend pas de WSLg.
+- `--show` exige un WSLg fonctionnel ; `install.sh` le diagnostique (si weston redémarre en boucle, `wsl --shutdown` côté Windows). Sur ce poste la boucle revient parfois même après `wsl --shutdown` (constaté le 2026-10-21) : `run.sh --show` teste d'abord l'affichage (`xdpyinfo`, 3 s) et échoue avec un message clair (mode invisible + image du portail) au lieu de l'erreur GTK « cannot open display ». Le headless ne dépend pas de WSLg.
 - Le paquet Ubuntu de VICE n'inclut pas les ROMs : `install.sh` les récupère depuis les sources officielles dans `~/.local/share/vice/C64` (ou compile VICE si la version est < 3.5).
 - `dbg.py` sert un client à la fois (les suivants attendent leur tour) ; `screen` suppose l'écran en `$0400` sauf argument.
 - VICE 3.7.1 envoie la réponse « display get » avec 4 octets de pixels en moins (coin inférieur droit, hors zone recadrée) : `dbg.py` complète.
