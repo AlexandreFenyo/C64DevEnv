@@ -446,7 +446,10 @@ def scenario_attach():
     c.body("pause", {"threadId": 1})
     c.stopped()
     f, line, name = c.where()
-    check((f, name) == ("hello.s", "loop"), "attach + pause : %s:%d (%s)" % (f, line, name))
+    # La pause arrête le processeur où il est : dans la boucle, ou parfois dans
+    # l'IRQ du KERNAL qui l'interrompt 60 fois par seconde.
+    check((f, name) == ("hello.s", "loop") or name.startswith(("KERNAL", "BASIC")),
+          "attach + pause : %s:%d (%s)" % (f, line, name))
     fb = c.body("setFunctionBreakpoints", {"breakpoints": [{"name": "loop"}]})
     check(fb["breakpoints"][0]["verified"], "point d'arrêt sur le label loop")
     c.body("continue", {"threadId": 1})

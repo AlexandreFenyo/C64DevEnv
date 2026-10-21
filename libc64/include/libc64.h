@@ -99,6 +99,27 @@ unsigned char __fastcall__ raster_register(unsigned int line, irq_handler_t h);
 /* Retire h ; plus aucun handler : l'IRQ raster est coupée. [asm] */
 void __fastcall__ raster_unregister(irq_handler_t h);
 
+/* --- Tileset du jeu (libc64/tileset) ------------------------------------------
+   Jeu de caractères décrit dans libc64/tileset/tileset.txt (182 tiles
+   $40-$FB, noms TILE_* et couleurs TC_* dans tiles.h, générés par
+   tools/mktileset.py). Fond vert clair ($D021), gris et blanc partagés
+   ($D022/$D023), mode multicolore case par case : une case est multicolore
+   si sa Color RAM vaut 8 + couleur (0-7). */
+#define TILESET_CHARSET 0x3800      /* banque VIC 0, hors de la ROM ($1000-$1FFF) */
+/* Copie les motifs en $3800 et règle le VIC-II. Renvoie 0, ou 0xFF si le
+   programme (code + données + BSS) déborde sur $3800 : rien n'est fait. */
+unsigned char tileset_install(void);
+/* Rend le jeu de caractères de la ROM et coupe le multicolore. */
+void tileset_done(void);
+/* Color RAM par défaut du tile (celle de sa palette ; 8 + couleur en MC). */
+unsigned char __fastcall__ tile_color(unsigned char code);
+/* Pose un tile en (x, y) avec sa Color RAM par défaut / imposée. */
+void __fastcall__ tile_put(unsigned char x, unsigned char y, unsigned char code);
+void __fastcall__ tile_put_color(unsigned char x, unsigned char y, unsigned char code,
+                                 unsigned char color);
+/* Tout l'écran avec un tile (Color RAM par défaut). */
+void __fastcall__ tile_fill(unsigned char code);
+
 /* --- Hasard (libc64/random) ---------------------------------------------- */
 /* Nombre pseudo-aléatoire 1-255 (registre à décalage, période 255). [asm] */
 unsigned char rnd8(void);

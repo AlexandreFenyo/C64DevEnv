@@ -64,7 +64,7 @@ $D screen --lower | head -1 | grep -q '^00|libc64 OK? *|$' || fail "screen_print
 [ "$(val _line_a)$(val _line_b)" = 6467 ] || fail "raster : handlers de 100/103 appelés aux lignes $((16#$(val _line_a)))/$((16#$(val _line_b)))"
 [ "$(val _mover_lines 2)" = "78 82" ] || fail "raster : handler déplacé 120<->130 appelé à $(val _mover_lines 2)"
 [ "$(val _count_a)" = "$(val _count_a_frozen)" ] || fail "raster_unregister : le handler est encore appelé"
-[ "$((16#$(val _count_b)))" -gt "$((16#$(val _count_a)))" ] || fail "raster : le handler de 103 doit continuer après le retrait de celui de 100"
+[ "$((16#$(val _b_delta)))" -ge 9 ] || fail "raster : le handler de 103 doit continuer après le retrait de celui de 100 ($((16#$(val _b_delta))) appels en 10 images)"
 echo "ok : irq et raster (réenregistrement, tables pleines, retrait, lignes exactes)"
 echo "ok : $(ls libc64/*/*.[cs] | wc -l) fonctions/modules vérifiés en exécution (rnd8 : $r ...)"
 tools/stop.sh --quiet
@@ -83,6 +83,37 @@ $D capture build/test_band.png >/dev/null || fail "capture"
 band=$(python3 tests/png_band.py build/test_band.png)
 case "$band" in *"n=3") ;; *) fail "demo : bande de 3 lignes attendue (relevé : $band)" ;; esac
 echo "ok : demo, bande bleue de 3 lignes raster ($band)"
+tools/stop.sh --quiet
+
+# Tileset : données générées à jour, installation (VIC-II, motifs en $3800,
+# Color RAM par défaut), rendu (drapeau bleu-blanc-rouge de tileset_demo).
+python3 tools/mktileset.py --check libc64/tileset/tileset.txt libc64/tileset/tileset_data.s \
+    libc64/include/tiles.h libc64/include/tiles.inc 2>/dev/null || fail "tileset : fichiers générés pas à jour (make)"
+tools/run.sh --headless --warp --monitor build/tileset_demo.prg >/dev/null || fail "run.sh tileset_demo"
+sleep 0.5
+[ "$($D mem _install_result 1 | cut -c7-8)" = 00 ] || fail "tileset_install : $($D mem _install_result 1)"
+[ "$(( 0x$($D mem '$d018' 1 --bank io | cut -c7-8) & 0x0e ))" = 14 ] || fail "tileset : \$D018 ne pointe pas sur \$3800"
+[ "$(( 0x$($D mem '$d016' 1 --bank io | cut -c7-8) & 0x10 ))" = 16 ] || fail "tileset : mode multicolore inactif"
+regs=$($D mem '$d021' 3 --bank io | cut -c7-14)
+set -- $regs
+[ "$(( 0x$1 & 15 )) $(( 0x$2 & 15 )) $(( 0x$3 & 15 ))" = "13 11 1" ] || fail "tileset : \$D021-\$D023 = $regs (13 11 1 attendus)"
+[ "$($D mem '$3a00' 8 | cut -c7-29)" = "cc cc 33 33 cc cc 33 33" ] || fail "tileset : motif HERBE en \$3A00"
+[ "$($D mem '$3fd8' 8 | cut -c7-29)" = "fe fc e0 c0 c0 80 80 00" ] || fail "tileset : motif LOGO_GWEN_BD en \$3FD8"
+[ "$($D mem '$3fe0' 8 | cut -c7-29)" = "00 00 00 00 00 00 00 00" ] || fail "tileset : code libre \$FC non vide"
+col=$($D mem '$d800' 2 --bank io | cut -c7-11); set -- $col
+[ "$(( 0x$1 & 15 )) $(( 0x$2 & 15 ))" = "5 10" ] || fail "tileset : Color RAM par défaut HERBE/ROUTE_H = $col (5 et 8+2 attendus)"
+$D capture build/test_tiles.png >/dev/null || fail "capture tileset_demo"
+flag=$(python3 - <<'PY'
+import sys
+sys.path.insert(0, "tests")
+from png_band import rows_of
+rows = rows_of("build/test_tiles.png")
+y = 36 + 9 * 8 + 4                     # ligne 9 de l'écran
+print(" ".join(str(rows[y][32 + c * 8 + 4]) for c in (28, 29, 30)))
+PY
+)
+[ "$flag" = "6 1 2" ] || fail "tileset : drapeau rendu en couleurs $flag (6 1 2 attendues)"
+echo "ok : tileset (données à jour, VIC-II, motifs en \$3800, Color RAM, rendu du drapeau)"
 tools/stop.sh --quiet
 
 # demo2 : début de bande retardé par des NOP jusqu'au bord de l'écran : bord

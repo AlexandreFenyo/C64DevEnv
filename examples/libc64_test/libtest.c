@@ -22,6 +22,7 @@ unsigned char irq_full;         /* irq_register sur table pleine : 0xFF attendu 
 unsigned char line_a, line_b;   /* lignes observées par les handlers de 100 et 103 */
 unsigned char count_a, count_b;
 unsigned char count_a_frozen;   /* count_a au moment du désenregistrement */
+unsigned char b_delta;          /* appels du handler de 103 pendant les 10 images suivantes */
 unsigned char mover_lines[2];   /* handler qui se déplace 120 <-> 130 */
 unsigned char raster_full;      /* raster_register sur table pleine : 0xFF attendu */
 
@@ -96,9 +97,11 @@ int main(void)
     }
     raster_unregister(at_a);
     count_a_frozen = count_a;
+    b_delta = count_b;
     for (i = 0; i < 10; ++i) {
         wait_frame();
     }
+    b_delta = count_b - b_delta;    /* compteur 8 bits : la différence reste juste */
     test_done = 1;
     for (;;) {
     }

@@ -93,6 +93,13 @@ prog_dir_sources = $(sort $(wildcard $(1)/*.s)) $(sort $(wildcard $(1)/*.c))
 $(foreach d,$(PROG_DIRS),$(eval $(call PROG_RULE,$(notdir $(d)),$(call prog_dir_sources,$(d)))))
 $(foreach f,$(PROG_FILES),$(eval $(call PROG_RULE,$(basename $(notdir $(f))),$(f))))
 
+# Données du tileset : générées depuis sa description (tools/mktileset.py).
+# Les fichiers générés sont versionnés ; cette règle les refait si la
+# description ou le générateur changent.
+$(LIB_DIR)/tileset/tileset_data.s $(LIB_DIR)/include/tiles.h $(LIB_DIR)/include/tiles.inc &: $(LIB_DIR)/tileset/tileset.txt $(TOOLS)/mktileset.py
+	python3 $(TOOLS)/mktileset.py $(LIB_DIR)/tileset/tileset.txt $(LIB_DIR)/tileset/tileset_data.s \
+	    $(LIB_DIR)/include/tiles.h $(LIB_DIR)/include/tiles.inc
+
 # Un module par fichier de libc64 (même options que les programmes, -g compris :
 # le pas à pas dans VS Code et le portail entre dans les fonctions de la
 # bibliothèque, source à l'appui).
