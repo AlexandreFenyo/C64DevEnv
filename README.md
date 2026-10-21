@@ -9,6 +9,8 @@ Tout se fait dans le dépôt, sur le système de fichiers Linux de la distributi
 - depuis Ubuntu : `cd ~/C64DevEnv` (soit `/home/fenyo/C64DevEnv`) ;
 - depuis Windows (Explorateur, VS Code…) : `\\wsl.localhost\Ubuntu-NEW\home\fenyo\C64DevEnv`.
 
+Après un `wsl --shutdown`, ouvrez d'abord Ubuntu depuis le bureau Windows (Terminal ou menu Démarrer) avant de relancer Claude Code : si WSL est redémarré par un processus d'arrière-plan, les fenêtres VICE s'ouvrent dans une session Windows invisible.
+
 Toutes les commandes ci-dessous se lancent depuis ce répertoire, dans un shell Ubuntu. Les fichiers générés vont dans `build/`.
 
 ## Installation

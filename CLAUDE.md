@@ -139,6 +139,7 @@ Couleurs : 0 noir, 1 blanc, 2 rouge, 3 cyan, 4 violet, 5 vert, 6 bleu, 7 jaune, 
 ## Limites connues
 
 - `--show` exige un WSLg fonctionnel ; `install.sh` le diagnostique (si weston redémarre en boucle, `wsl --shutdown` côté Windows). Sur ce poste la boucle revient parfois même après `wsl --shutdown` (constaté le 2026-10-21) : `run.sh --show` teste d'abord l'affichage (`xdpyinfo`, 3 s) et échoue avec un message clair (mode invisible + image du portail) au lieu de l'erreur GTK « cannot open display ». Le headless ne dépend pas de WSLg.
+- **Fenêtres invisibles** : si WSL est démarré par un processus non interactif (ex. session Claude relancée à distance après `wsl --shutdown`), WSLg ouvre ses fenêtres dans la session Windows 0 « Services » : `xdpyinfo` répond, x64sc tourne, le portail montre l'image, mais rien n'apparaît sur le bureau (et la boucle weston/« checkDescriptor » semble en découler). Vérifier : `tasklist.exe /fi "imagename eq msrdc.exe"` doit indiquer « Console ». Remède : `wsl --shutdown`, puis ouvrir Ubuntu depuis le bureau Windows **avant** de relancer Claude.
 - Le paquet Ubuntu de VICE n'inclut pas les ROMs : `install.sh` les récupère depuis les sources officielles dans `~/.local/share/vice/C64` (ou compile VICE si la version est < 3.5).
 - `dbg.py` sert un client à la fois (les suivants attendent leur tour) ; `screen` suppose l'écran en `$0400` sauf argument.
 - VICE 3.7.1 envoie la réponse « display get » avec 4 octets de pixels en moins (coin inférieur droit, hors zone recadrée) : `dbg.py` complète.
