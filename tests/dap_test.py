@@ -357,6 +357,54 @@ def scenario_c():
     c.close()
 
 
+def scenario_chips():
+    print("--- puces : examples/sprite_sid (sprite + SID en pas à pas)")
+    rel = "examples/sprite_sid/sprite_sid.s"
+    src = os.path.join(ROOT, rel)
+    l_vol = line_of(rel, "lda #15")
+    l_frames = line_of(rel, "sta frames")
+    c = start(src, stop_on_entry=False)
+    c.body("setBreakpoints", {"source": {"path": src}, "breakpoints": [{"line": l_vol}, {"line": l_frames}]})
+    c.body("configurationDone")
+    st = c.stopped()
+    check(st["reason"] == "breakpoint" and c.where()[1] == l_vol, "arrêt après l'activation du sprite (ligne %d)" % l_vol)
+    spr, _ = c.variables("Sprites")
+    s0 = spr["sprite 0"]["value"]
+    check(s0 == "x=24 y=140 7 jaune", "sprite 0 activé : %s" % s0)
+    props = {v["name"]: v["value"] for v in c.body("variables", {"variablesReference": spr["sprite 0"]["variablesReference"]})["variables"]}
+    check("$0340" in props.get("pointeur ($07f8)", "") and props.get("agrandi") == "X Y",
+          "sprite 0 : pointeur %s, agrandi %s" % (props.get("pointeur ($07f8)"), props.get("agrandi")))
+    c.body("continue", {"threadId": 1})
+    c.stopped()
+    c.body("next", {"threadId": 1})       # exécute « sta frames » : la note est lancée
+    c.stopped()
+    sid, _ = c.variables("SID")
+    v1 = sid["voix 1 ($d400)"]["value"]
+    check(v1 == "triangle, 440 Hz, gate ouvert" and sid["volume"]["value"] == "15/15", "SID voix 1 : %s" % v1)
+    # Point d'arrêt sur écriture de $D010 : premier passage de x au-delà de 255.
+    c.body("setBreakpoints", {"source": {"path": src}, "breakpoints": []})
+    c.body("setDataBreakpoints", {"breakpoints": [{"dataId": "d010:1", "accessType": "write"}]})
+    seen = None
+    for _ in range(300):
+        c.body("continue", {"threadId": 1})
+        c.stopped()
+        if c.evaluate("$d010").startswith("$01"):
+            seen = c.evaluate("xpos,w")
+            break
+    check(seen is not None and seen.startswith("256 "), "bit 9 de x : $D010=1 quand xpos=%s" % seen)
+    spr, _ = c.variables("Sprites")
+    check(spr["sprite 0"]["value"].startswith("x=256 "), "sprite 0 au-delà de 255 : %s" % spr["sprite 0"]["value"])
+    c.body("setDataBreakpoints", {"breakpoints": []})
+    c.body("continue", {"threadId": 1})
+    deadline = time.time() + 20
+    while time.time() < deadline and not c.evaluate("$02ff").startswith("$42"):
+        time.sleep(0.3)
+    sid, _ = c.variables("SID")
+    check(c.evaluate("$02ff").startswith("$42") and "gate fermé" in sid["voix 1 ($d400)"]["value"],
+          "fin : témoin posé, note relâchée (%s)" % sid["voix 1 ($d400)"]["value"])
+    c.close()
+
+
 def scenario_attach():
     print("--- attach : instance lancée par run.sh (examples/hello)")
     subprocess.run(["tools/run.sh", "--headless", "--warp", "--monitor", "build/hello.prg"], cwd=ROOT,
@@ -410,6 +458,7 @@ def main():
     try:
         scenario_asm()
         scenario_c()
+        scenario_chips()
         scenario_attach()
     finally:
         subprocess.run(["tools/stop.sh", "--quiet", "--all"])
