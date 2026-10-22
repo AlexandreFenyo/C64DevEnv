@@ -256,6 +256,7 @@ function launch(prog) {
     prog,
     mode: $("#opt-mode").value,
     warp: $("#opt-warp").checked,
+    nosound: $("#opt-nosound").checked,
     monitor: $("#opt-monitor").checked,
   });
 }

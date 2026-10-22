@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # run.sh - lance un .prg dans VICE x64sc, visible (WSLg) ou headless (xvfb).
 #
-# Usage : run.sh [--show|--headless] [--warp] [--cycles N] [--screenshot f.png]
-#                [--monitor] [--load-only] [--port P] [--wait] [--] prog.prg
+# Usage : run.sh [--show|--headless] [--warp] [--no-sound] [--cycles N]
+#                [--screenshot f.png] [--monitor] [--load-only] [--port P]
+#                [--wait] [--] prog.prg
 #
 #   --show        fenêtre VICE visible via WSLg (défaut)
 #   --headless    sous xvfb-run, son désactivé, invisible
 #   --warp        vitesse maximale (-warp)
+#   --no-sound    son coupé en mode visible (-sounddev dummy) : pour les
+#                 longues sessions, la sortie son de WSLg (PulseAudio) peut
+#                 ralentir puis figer VICE au bout de quelques heures
 #   --cycles N    -limitcycles N : VICE s'arrête seul après N cycles ;
 #                 run.sh attend alors la fin (exécution bornée)
 #   --screenshot  -exitscreenshot : capture PNG à la sortie (avec --cycles)
@@ -43,6 +47,7 @@ X64SC="${X64SC:-x64sc}"
 
 MODE=show
 WARP=0
+NOSOUND=0
 CYCLES=""
 SCREENSHOT=""
 MONITOR=0
@@ -65,6 +70,7 @@ while [ $# -gt 0 ]; do
         --show) MODE=show ;;
         --headless) MODE=headless ;;
         --warp) WARP=1 ;;
+        --no-sound) NOSOUND=1 ;;
         --cycles) [ $# -ge 2 ] || die "--cycles attend un nombre"; CYCLES="$2"; shift ;;
         --screenshot) [ $# -ge 2 ] || die "--screenshot attend un fichier"; SCREENSHOT="$2"; shift ;;
         --monitor) MONITOR=1 ;;
@@ -162,11 +168,12 @@ case "$MODE" in
         CMD=(env -u WAYLAND_DISPLAY GDK_BACKEND=x11 xvfb-run -a "$X64SC" "${ARGS[@]}")
         ;;
     show)
+        [ "$NOSOUND" = 1 ] && ARGS+=(-sounddev dummy)
         CMD=(env -u WAYLAND_DISPLAY GDK_BACKEND=x11 "$X64SC" "${ARGS[@]}")
         ;;
 esac
 
-echo "run.sh: $NAME ($MODE$( [ "$MONITOR" = 1 ] && echo ", monitor :$PORT")$( [ -n "$CYCLES" ] && echo ", $CYCLES cycles"))"
+echo "run.sh: $NAME ($MODE$( [ "$NOSOUND" = 1 ] && echo ", sans son")$( [ "$MONITOR" = 1 ] && echo ", monitor :$PORT")$( [ -n "$CYCLES" ] && echo ", $CYCLES cycles"))"
 : >"$LOGFILE"
 # Instance interactive : état "starting" écrit AVANT le lancement, pour que
 # personne (dbg.py, portail) ne touche au moniteur pendant l'autostart.

@@ -85,6 +85,26 @@ def main():
           "check_flags détecte une option nouvelle non reportée")
     check(any("--old" in p and "obsolète" in p for p in probs),
           "check_flags détecte une exclusion obsolète")
+    # post_launch : --no-sound transmis à run.sh en mode visible seulement
+    # (tâche interceptée : pas de fenêtre VICE pendant les tests).
+    class FakeHandler:
+        def __init__(self, body):
+            self.body = body
+
+        def read_json(self):
+            return self.body
+    launched = []
+    real_start_job = portal.start_job
+    portal.start_job = lambda h, title, steps, **kw: launched.append((title, steps[-1]))
+    try:
+        portal.post_launch(FakeHandler({"prog": "hello", "mode": "show", "nosound": True}), {})
+        portal.post_launch(FakeHandler({"prog": "hello", "mode": "headless", "nosound": True}), {})
+        portal.post_launch(FakeHandler({"prog": "hello", "mode": "show"}), {})
+    finally:
+        portal.start_job = real_start_job
+    check(len(launched) == 3 and "--no-sound" in launched[0][1] and "sans son" in launched[0][0]
+          and "--no-sound" not in launched[1][1] and "--no-sound" not in launched[2][1],
+          "Lancer : case « Sans son » -> run.sh --no-sound (mode visible seulement)")
     probs = portal.check_flags("x.sh", {"--a"}, {"--a": "", "--gone": ""}, {})
     check(any("--gone" in p for p in probs), "check_flags détecte une option utilisée disparue")
 

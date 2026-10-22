@@ -59,9 +59,10 @@ Piège cc65 : les chaînes sont converties ASCII→PETSCII. En **assembleur** (j
 ### run.sh
 
 ```
-tools/run.sh [--show|--headless] [--warp] [--cycles N] [--screenshot f.png] [--monitor] [--load-only] [--port P] [--wait] prog.prg
+tools/run.sh [--show|--headless] [--warp] [--no-sound] [--cycles N] [--screenshot f.png] [--monitor] [--load-only] [--port P] [--wait] prog.prg
 ```
 
+- `--no-sound` : mode visible sans son (`-sounddev dummy` ; le headless l'est toujours) ; case « Sans son » du portail. Raison : en visible, VICE envoie le son à PulseAudio de WSLg (`/mnt/wslg/PulseServer`, relayé à Windows en RDP) et règle sa vitesse dessus ; constaté le 2026-10-22 après ~9 h : `Sync is N ms behind` (jusqu'à 37 s), `pa_simple_flush(): Timeout`, puis VICE figé (gdb : fil d'émulation bloqué dans `pa_simple_flush`, sans délai d'expiration ; PulseAudio rétabli dès l'instance tuée). Diagnostic : `build/vice.log`, `pactl info` (pulseaudio-utils), `sudo gdb -p PID -batch -ex "thread apply all bt"`.
 - `--load-only` : `-autoload` au lieu de `-autostart` (même injection en RAM, « AUTOSTART: Done » aussi, mais pas de `RUN`) : le C64 est au `READY.`, le programme en mémoire ; sert à poser les points d'arrêt avant de taper `RUN` (`dap.py`).
 
 - `--cycles N` + `--screenshot` : `-limitcycles`/`-exitscreenshot`, VICE s'arrête seul, run.sh attend. Boot + autostart ≈ 3,5 M cycles : utiliser **≥ 5 000 000** pour voir le programme à l'écran.

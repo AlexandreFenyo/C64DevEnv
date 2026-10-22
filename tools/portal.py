@@ -53,6 +53,7 @@ SCRIPT_FLAGS = {
             "--show": "Lancer, mode « Visible (WSLg) »",
             "--headless": "Lancer, mode « Invisible » ; Capture",
             "--warp": "case « Warp » (Lancer, Capture)",
+            "--no-sound": "case « Sans son » (Lancer, mode visible ; le mode invisible est toujours sans son)",
             "--monitor": "case « Moniteur » (Lancer)",
             "--cycles": "Capture : champ « Cycles »",
             "--screenshot": "Capture : PNG dans build/portal/",
@@ -818,11 +819,14 @@ def post_launch(h, q):
     args = ["tools/run.sh", flag("tools/run.sh", "--" + mode)]
     if body.get("warp"):
         args.append(flag("tools/run.sh", "--warp"))
+    if body.get("nosound") and mode == "show":
+        args.append(flag("tools/run.sh", "--no-sound"))
     if body.get("monitor", True):
         args.append(flag("tools/run.sh", "--monitor"))
     args.append("build/%s.prg" % prog)
-    title = "Lancement de %s (%s%s)" % (prog, "visible" if mode == "show" else "invisible",
-                                        ", moniteur" if body.get("monitor", True) else "")
+    title = "Lancement de %s (%s%s%s)" % (prog, "visible" if mode == "show" else "invisible",
+                                          ", sans son" if body.get("nosound") and mode == "show" else "",
+                                          ", moniteur" if body.get("monitor", True) else "")
     start_job(h, title, [["make"], args])
 
 
